@@ -1,0 +1,38 @@
+# ===========================================================================
+#  Exarion - fichiers a ne jamais versionner
+# ===========================================================================
+
+# --- Sorties de compilation ---
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.dll
+*.exe
+*.pdb
+
+# --- Visual Studio / Rider ---
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# --- Sorties du moteur ---
+#
+# Le rapport de plantage et les captures sont des SORTIES, regenerables a
+# volonte. Les versionner polluerait l'historique a chaque session.
+plantage.txt
+capture*.png
+rendu*.png
+*.tmp
+
+# Reglages PERSONNELS. Chacun trouve les siens a l'essai - vitesse,
+# sensibilite, intensite des effets. Les versionner imposerait ses gouts
+# a tout le monde et genererait un conflit a chaque session.
+*.cfg
+
+# --- Systeme ---
+Thumbs.db
+desktop.ini
+.DS_Store

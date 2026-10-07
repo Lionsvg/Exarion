@@ -1,0 +1,67 @@
+exarion_map 3
+# Carte de demonstration des FORMES et des MARQUEURS D'ENTITES (17/08).
+#
+# Ecrite ENTIEREMENT A LA MAIN, comme essai.map l'etait pour 4.2. C'est la
+# seule preuve qui justifie d'avoir choisi le texte plutot que le binaire :
+# si personne ne peut ecrire une carte dans un editeur de texte, autant
+# faire du binaire.
+#
+# box    centre(x y z)  taille(x y z)  couleur(r v b, LINEAIRE)  [forme]
+#        forme : bloc (defaut), sphere, cylindre, rampe, cone
+# entity type  position(x y z)  lacet tangage  [cle=valeur ...]
+
+name formes
+
+spawn 0 0 16 0 -8
+
+# --- Le sol, et deux murs pour que les ombres aient ou tomber -------------
+
+box 0 -0.5 0     40 1 40    0.30 0.31 0.34
+box 0 3 -14      40 8 1     0.38 0.36 0.34
+box -14 3 0      1 8 30     0.38 0.36 0.34
+
+# --- Une de chaque forme, alignee, meme volume : 2 x 2 x 2 ----------------
+#
+# Meme taille pour toutes : c'est ce qui permet de VOIR que la forme change
+# et pas l'echelle. Un cube de 2 m a cote d'une sphere de 3 ne prouverait
+# rien sur la primitive elle-meme.
+
+box -6 1 0    2 2 2    0.62 0.30 0.28
+box -3 1 0    2 2 2    0.28 0.62 0.36   sphere
+box  0 1 0    2 2 2    0.30 0.45 0.68   cylindre
+box  3 1 0    2 2 2    0.66 0.55 0.22   rampe
+box  6 1 0    2 2 2    0.55 0.30 0.62   cone
+
+# Une rampe PLUS LARGE que haute, pour verifier que la normale de la pente
+# se calcule au lieu d'etre ecrite en dur : sur un cube, une normale fausse
+# donne le meme resultat qu'une normale juste.
+box 10 0.6 4    6 1.2 4    0.50 0.48 0.40   rampe
+
+# Un cylindre etire, meme raison : la normale d'une ellipse n'est pas la
+# direction du centre vers le point.
+box -10 2 6    1.2 4 3     0.42 0.44 0.50   cylindre
+
+# --- Entites : une de chaque, pour comparer les silhouettes ---------------
+
+entity info_player_spawn  0 0 16   0 -8
+entity info_waypoint      -8 0 8   0 0   path=ronde order=0
+entity info_waypoint       8 0 8   0 0   path=ronde order=1
+
+# Le volume fait 6 m de cote et 3 de haut : le marqueur doit montrer CE
+# volume, pas un cube de 60 cm. C'est tout l'objet du changement.
+entity trigger_volume      0 1.5 8   0 0   size=6 height=3 target=porte input=Ouvrir
+
+# Le PNJ porte une portee et un champ de vision volontairement etroits :
+# deux lattes bien separees se jugent, un cone de 110 degres a 20 m
+# remplirait l'ecran.
+entity npc_dummy          -6 0 10   30 0   name=garde_1 behaviour=patrol path=ronde speed=2.2 sight=12 fov=70
+
+entity func_door           12 0 -6   0 0   name=porte axis=y distance=4 speed=2.5 width=3 height=4 wait=4
+
+# --- Lumieres -------------------------------------------------------------
+
+light_dir -0.35 -1 -0.25   0.62 0.70 0.85   1.6
+
+light_point  0 4 6      1 0.85 0.6    120 18
+light_point -9 4 -4     0.6 0.8 1     90 16
+light_point  9 4 -4     1 0.7 0.5     90 16

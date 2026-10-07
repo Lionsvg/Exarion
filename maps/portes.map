@@ -1,0 +1,64 @@
+exarion_map 2
+# Carte de demonstration de E17 : les entites qui AGISSENT.
+#
+# Ecrite ENTIEREMENT A LA MAIN, comme essai.map. Elle repond a une question
+# precise : est-ce qu'un auteur de niveau peut fabriquer une CONSEQUENCE sans
+# ecrire une ligne de C# ? Tout ce qui suit est de la donnee.
+#
+# Pour la voir marcher :
+#   --map portes --exec play
+#   puis marcher dans le couloir, ou en console : ent_send porte_hall Basculer
+#
+# entity <type> <x y z> <lacet> <tangage> cle=valeur ...
+# ⚠️ Une valeur de propriete NE PEUT PAS contenir d'espace : le format
+#    decoupe sur les espaces. D'ou axis=y + distance=3 au lieu d'un vecteur.
+
+name demo des portes
+# ⚠️ Lacet 0 = vers les Z NEGATIFS. Ecrit 180 au premier jet, le joueur
+# apparaissait dos a la porte - et on ne voit alors rien de la demo.
+spawn 0 1 10  0 -3
+
+# --- la piece : 30 x 30, ouverte sur le ciel -----------------------------
+box   0 -0.5   0     30  1 30    0.3  0.31 0.34
+box -15.3 4    0      0.6 9 30   0.48 0.49 0.52
+box  15.3 4    0      0.6 9 30   0.48 0.49 0.52
+box   0   4  -15.3   30   9  0.6  0.48 0.49 0.52
+box   0   4   15.3   30   9  0.6  0.48 0.49 0.52
+
+# --- une cloison percee d'une embrasure de 3 m, en z = 0 ----------------
+# La porte viendra boucher ce trou. Deux morceaux de mur laissent 3 m libres.
+box  -8   2.5   0    13  5 0.6   0.5  0.46 0.44
+box   8   2.5   0    13  5 0.6   0.5  0.46 0.44
+box   0   4.5   0     3  1 0.6   0.5  0.46 0.44
+
+# --- la fosse a franchir par l'ascenseur, cote nord ---------------------
+box  -6   2.0  -11    6  4 6     0.4  0.44 0.5
+box   6   2.0  -11    6  4 6     0.4  0.44 0.5
+
+# --- 1. LA PORTE : elle monte de 5 m et bouche l'embrasure -------------
+# Posee au sol dans l'embrasure. axis=y distance=5 : elle se leve.
+# wait=4 : elle se referme seule quatre secondes apres son arrivee.
+entity func_door 0 0 0  0 0  name=porte_hall axis=y distance=5 speed=2.5 width=3 height=4.5 depth=0.5 wait=4
+
+# --- 2. LE DECLENCHEUR qui l'ouvre en approchant -----------------------
+# Un volume de 6 m devant la porte. Il vise la porte PAR SON NOM.
+entity trigger_volume 0 0 6  0 0  size=6 height=4 target=porte_hall input=Ouvrir
+
+# --- 3. L'ASCENSEUR entre les deux blocs, actionne par un declencheur --
+# distance=4 : il monte au niveau du dessus des blocs (4 m).
+entity func_door -0 0 -11  0 0  name=ascenseur axis=y distance=3.6 speed=1.8 width=6 height=0.4 depth=6
+
+entity trigger_volume 0 0.5 -7  0 0  size=3 height=4 target=ascenseur input=Ouvrir
+
+# --- 4. UNE HERSE qui coulisse sur le cote, pour montrer axis=x --------
+# distance negative : elle part vers les x negatifs.
+entity func_door 11 0 -6  0 0  name=herse axis=x distance=-3 speed=4 width=3 height=3 depth=0.4
+
+# --- 5. UN CHECKPOINT derriere la porte, pour prouver l'enchainement ---
+entity trigger_checkpoint 0 0 -4  0 0  size=4 height=3 name=HALL
+
+# --- eclairage ---------------------------------------------------------
+light_dir   -0.35 -0.85 -0.4   0.62 0.7 0.85   1.1
+light_point  0 5 7     1 0.78 0.48   180  26
+light_point  0 5 -6    0.6 0.8 1     180  26
+light_point -9 5 -11   1 0.78 0.48   120  20

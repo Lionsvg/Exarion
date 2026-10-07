@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ===================================================================
+       LE JEU D'EXEMPLE.
+
+       Sa raison d'etre n'est pas de montrer quoi que ce joli : c'est la
+       SEULE PREUVE que le moteur est utilisable par autre chose que son
+       bac a sable. Un moteur avec un seul jeu peut etre arbitrairement
+       couple a ce jeu sans que personne ne s'en apercoive - il faut un
+       second client pour que le couplage se voie.
+
+       Regle a tenir : ce projet ne reference que les deux bibliotheques,
+       JAMAIS Exarion.Game. Le jour ou il en aurait besoin, c'est que le
+       moteur n'est pas complet.
+       =================================================================== -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Exarion.Engine\Exarion.Engine.csproj" />
+    <ProjectReference Include="..\..\src\Exarion.Core\Exarion.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Exarion.Sample</AssemblyName>
+    <RootNamespace>Exarion.Sample</RootNamespace>
+  </PropertyGroup>
+
+</Project>
