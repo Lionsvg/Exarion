@@ -95,6 +95,44 @@ namespace Exarion.Tests
             return o.Count > 0 ? o[^1] : "";
         }
 
+        // --- Suivi de la sortie --------------------------------------------
+
+        /// <summary>
+        /// ⚠️ LE TAMPON EST BORNE, LE SUIVI NE DOIT PAS L'ETRE. Compter Output
+        /// avant et apres une commande ne voit plus rien une fois le tampon
+        /// plein : c'est ce qui faisait taire les --exec au-dela de 200 lignes.
+        /// L'evenement, lui, doit livrer CHAQUE ligne.
+        /// </summary>
+        [Test]
+        public void Chaque_Ligne_Est_Signalee_Meme_Quand_Le_Tampon_Est_Plein()
+        {
+            _console.MaxOutputLines = 3;
+
+            var recues = new List<string>();
+            _console.LinePrinted += recues.Add;
+
+            for (int i = 0; i < 10; i++)
+                _console.Print("ligne " + i);
+
+            ClassicAssert.AreEqual(10, recues.Count);
+            ClassicAssert.AreEqual("ligne 9", recues[9]);
+
+            // Le tampon, lui, reste borne - c'est voulu, et c'est justement
+            // pourquoi son compte ne peut pas servir a suivre la sortie.
+            ClassicAssert.AreEqual(3, _console.Output.Count);
+        }
+
+        [Test]
+        public void La_Sortie_D_Une_Commande_Passe_Par_L_Evenement()
+        {
+            var recues = new List<string>();
+            _console.LinePrinted += recues.Add;
+
+            _console.Execute("gravity");
+
+            ClassicAssert.IsTrue(recues.Exists(l => l.Contains("15.24")), string.Join(" | ", recues));
+        }
+
         // --- Lecture et ecriture ---------------------------------------------
 
         [Test]
@@ -361,6 +399,91 @@ namespace Exarion.Tests
 
             ClassicAssert.AreEqual(3.7f, appliedGravity, 1e-4f,
                 "le moteur doit recevoir la nouvelle valeur");
+        }
+
+        // ===================================================================
+        //  Commandes differees
+        // ===================================================================
+
+        /// <summary>
+        /// « delay » attend du temps de SIMULATION : rien ne part avant, et la
+        /// commande part au pas ou l'echeance est atteinte.
+        /// </summary>
+        [Test]
+        public void Une_Commande_Differee_Part_A_Son_Echeance()
+        {
+            var console = new ConsoleSystem();
+            console.Register("x", 0f, -100f, 100f);
+
+            console.Execute("delay 1 x 5");
+
+            console.Advance(0.5);
+            ClassicAssert.AreEqual(0f, console.Find("x")!.Value, "partie trop tot");
+
+            console.Advance(0.5);
+            ClassicAssert.AreEqual(5f, console.Find("x")!.Value);
+            ClassicAssert.AreEqual(0, console.ScheduledCount);
+        }
+
+        [Test]
+        public void Deux_Commandes_Differees_Partent_Dans_L_Ordre()
+        {
+            var console = new ConsoleSystem();
+            console.Register("x", 0f, -100f, 100f);
+
+            // Meme echeance : l'ordre de programmation decide. Echeances
+            // differentes : la plus proche d'abord, quel que soit l'ordre tape.
+            console.Execute("delay 2 x 3");
+            console.Execute("delay 1 x 1");
+            console.Execute("delay 1 x 2");
+
+            console.Advance(5.0);
+
+            ClassicAssert.AreEqual(3f, console.Find("x")!.Value, "1, puis 2, puis 3");
+        }
+
+        /// <summary>
+        /// ⚠️ Une commande programmee PENDANT l'execution attend l'appel suivant :
+        /// sinon « delay 0 » enchaine sur lui-meme dans un seul pas.
+        /// </summary>
+        [Test]
+        public void Une_Chaine_De_Delais_Nuls_Avance_D_Un_Cran_Par_Pas()
+        {
+            var console = new ConsoleSystem();
+            console.Register("x", 0f, -100f, 100f);
+
+            console.Execute("delay 0 delay 0 x 7");
+
+            console.Advance(0.01);
+            ClassicAssert.AreEqual(0f, console.Find("x")!.Value);
+            ClassicAssert.AreEqual(1, console.ScheduledCount);
+
+            console.Advance(0.01);
+            ClassicAssert.AreEqual(7f, console.Find("x")!.Value);
+        }
+
+        [TestCase("delay")]
+        [TestCase("delay 2")]
+        [TestCase("delay -1 x 5")]
+        [TestCase("delay abc x 5")]
+        public void Un_Delai_Mal_Forme_N_Est_Pas_Programme(string line)
+        {
+            var console = new ConsoleSystem();
+            console.Execute(line);
+
+            ClassicAssert.AreEqual(0, console.ScheduledCount);
+        }
+
+        [Test]
+        public void Un_Delai_A_La_Virgule_Est_Accepte()
+        {
+            var console = new ConsoleSystem();
+            console.Register("x", 0f, -100f, 100f);
+
+            console.Execute("delay 0,5 x 9");
+            console.Advance(0.5);
+
+            ClassicAssert.AreEqual(9f, console.Find("x")!.Value);
         }
     }
 }

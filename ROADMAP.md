@@ -63,8 +63,8 @@ enchaînement complet en console, 51 759 pixels changés à caméra identique, H
 (joueur monté de `Y 0,40` à `Y 4,00` sur une course déclarée de 3,6 m).
 
 ⚠️ **Utilisable ne veut pas dire fini.** Les manques sont listés franchement dans le
-[`README.md`](README.md) : pas de recherche de chemin, **une seule entité qui
-agit**, pas de rotation dans le format, pas de modèle plaçable, pas de script, Linux non testé,
+[`README.md`](README.md) : **peu d'entités qui agissent** (portes et logique ; la
+recherche de chemin et la logique sont arrivées le 08/10, E16 et E18), pas de rotation dans le format, pas de modèle plaçable, pas de script, Linux non testé,
 ressenti non réglé.
 
 ---
@@ -181,9 +181,11 @@ sur une grille / annuler / sauvegarder — plus un menu et des états d'applicat
 | **E11** | **Entités** dans le format : type + propriétés clé/valeur | ✅ **17/08** — 14 tests |
 | **E12** | Points d'apparition multiples honorés par le moteur | ✅ **17/08** — mesuré |
 | **E13** | Runtime : checkpoints, déclencheurs, événements | ✅ **17/08** — 18 tests, 4 mutations. ⚠️ Les sorties sont émises, **aucune ENTRÉE n'agit encore** |
-| **E14** | PNJ : perception, ronde, poursuite, retour au poste | ✅ **17/08** — 22 tests, 3 mutations. ⚠️ **aucun calcul de chemin** : ligne droite, bloqué par tout obstacle |
-| **E16** | **Calcul de chemin** (navmesh ou grille) | ⏳ **la plus grosse absence de l'IA** |
-| **E17** | Entrées côté cible : une porte qui s'ouvre vraiment | ⏳ les sorties sont émises, rien ne les reçoit |
+| **E14** | PNJ : perception, ronde, poursuite, retour au poste | ✅ **17/08** — 22 tests, 3 mutations. Le calcul de chemin est venu avec E16 |
+| **E16** | **Calcul de chemin** : grille 2,5D, A*, composantes fortement connexes | ✅ **08/10** — 22 tests, 9 mutations, `maps/chemins.map`. ⚠️ la grille ne voit que le décor (ni portes, ni caisses) |
+| **E17** | Entrées côté cible : une porte qui s'ouvre vraiment | ✅ **17/08** — `func_door`, voir plus haut |
+| **E18** | Entités **logiques** : relais, minuterie, compteur ; fils de câblage dans l'éditeur | ✅ **08/10** — 16 tests, 6 mutations, `maps/logique.map`. ⚠️ F10–F12 non vérifiées au clavier |
+| **E19** | **Ambiance** comme cibles : lumière et son commutables ; PNJ qu'on réveille | ✅ **08/10** — 18 tests, 4 mutations ; capture, WAV (440,0 Hz), HUD. ⚠️ pas de touche d'éditeur dédiée (`ed_entity env_light`) |
 | **E15** | Script Lua | ⏳ **licences tranchées le 17/08 : LuaCSharp, MIT.** Rien d'installé |
 | **E6** | Édition des **lumières** | ⏳ la carte les porte, l'éditeur ne les touche pas |
 | **E7** | Manipulateurs à la souris (gizmos), glisser une face | ⏳ tout passe par le clavier |

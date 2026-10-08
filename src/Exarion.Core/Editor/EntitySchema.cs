@@ -16,14 +16,21 @@
 //  ⚠️ CE CATALOGUE DOIT SUIVRE LE CODE, ET C'EST SON SEUL RISQUE.
 //
 //  Chaque cle ci-dessous a ete relevee dans le code qui la LIT - AgentWorld,
-//  EntityWorld, Mover, et le cablage des portes dans Program.cs - pas
-//  recopiee d'une note. Une cle inventee ici serait pire qu'une cle absente :
-//  elle apparaitrait dans le panneau, l'auteur du niveau la reglerait, et
-//  rien ne se passerait. Le defaut se lirait comme « le moteur ignore mes
-//  reglages ».
+//  EntityWorld, Mover, MoverWorld.DeliverOutputs - pas recopiee d'une note.
+//  Une cle inventee ici serait pire qu'une cle absente : elle apparaitrait
+//  dans le panneau, l'auteur du niveau la reglerait, et rien ne se passerait.
+//  Le defaut se lirait comme « le moteur ignore mes reglages ».
 //
 //  Un defaut affiche qui ne correspond pas au defaut du code a exactement le
 //  meme effet, en plus discret : on croit lire l'etat du moteur.
+//
+//  ⚠️⚠️ ET C'ETAIT LE CAS POUR CINQ D'ENTRE ELLES, trouvees le 08/10 : la
+//  taille des volumes (4 affiche, 3 lu), l'epaisseur des portes (0,2 contre
+//  0,3), les entrees des PNJ (Trigger/Untrigger contre Alert/Calm) - et trois
+//  cles lues mais absentes d'ici (input_goal, input_open, input_close).
+//  EntitySchemaTests confronte desormais chaque defaut au moteur : une entite
+//  SANS propriete et la meme avec TOUS les defauts ecrits doivent se
+//  comporter a l'identique. Une cle MANQUANTE, elle, ne se detecte pas ainsi.
 //  ---------------------------------------------------------------------
 // ===========================================================================
 
@@ -68,37 +75,43 @@ namespace Exarion.Core.Editor
                     new PropertySpec("team", "", "equipe - PORTEE PAR LE FICHIER, PAS ENCORE LUE"),
                 },
 
+                // Defauts releves dans EntityWorld.VolumeOf : DefaultVolumeSize,
+                // et une hauteur absente qui REPREND le cote.
                 [EntityTypes.Checkpoint] = new[]
                 {
                     new PropertySpec("name", "", "nom affiche dans la liste des checkpoints"),
-                    new PropertySpec("order", "0", "ordre de tri quand il n'y a pas de nom"),
-                    new PropertySpec("size", "4", "cote du volume, en metres"),
-                    new PropertySpec("height", "4", "hauteur du volume si differente du cote"),
+                    new PropertySpec("order", "", "nom de repli sans « name » - absent : rang dans la carte (#n)"),
+                    new PropertySpec("size", "3", "cote du volume, en metres"),
+                    new PropertySpec("height", "3", "hauteur - ABSENTE, elle reprend size"),
                     new PropertySpec("once", "0", "1 = ne se declenche qu'une fois"),
                 },
 
                 [EntityTypes.Trigger] = new[]
                 {
                     new PropertySpec("name", "", "nom, pour etre vise par une autre sortie"),
-                    new PropertySpec("size", "4", "cote du volume, en metres"),
-                    new PropertySpec("height", "4", "hauteur du volume si differente du cote"),
+                    new PropertySpec("size", "3", "cote du volume, en metres"),
+                    new PropertySpec("height", "3", "hauteur - ABSENTE, elle reprend size"),
                     new PropertySpec("target", "", "nom de l'entite a actionner"),
                     new PropertySpec("input", "Trigger", "entree appelee sur OnEnter"),
                     new PropertySpec("input_exit", "Untrigger", "entree appelee sur OnExit"),
                     new PropertySpec("once", "0", "1 = ne se declenche qu'une fois"),
                 },
 
+                // Les entrees par defaut viennent de AgentWorld.DefaultInputFor.
+                // Aucune cible ne les comprend : elles servent a montrer qu'une
+                // sortie est cablee sans entree choisie (EntreeInconnue).
                 [EntityTypes.Npc] = new[]
                 {
-                    new PropertySpec("name", "", "nom affiche sur le HUD"),
+                    new PropertySpec("name", "", "HUD, et cible de Patrouiller / Arreter / Rentrer"),
                     new PropertySpec("behaviour", "patrol", "patrol ou idle"),
                     new PropertySpec("path", "defaut", "nom du chemin de points de passage"),
                     new PropertySpec("speed", "2.2", "vitesse de deplacement, m/s"),
                     new PropertySpec("sight", "20", "portee de vue, en metres"),
                     new PropertySpec("fov", "110", "champ de vision HORIZONTAL, en degres"),
-                    new PropertySpec("target", "", "nom de l'entite a actionner quand il voit"),
-                    new PropertySpec("input_spot", "Trigger", "entree appelee sur OnSpotPlayer"),
-                    new PropertySpec("input_lose", "Untrigger", "entree appelee sur OnLosePlayer"),
+                    new PropertySpec("target", "", "entite a actionner, pour les TROIS sorties"),
+                    new PropertySpec("input_spot", "Alert", "entree appelee sur OnSpotPlayer"),
+                    new PropertySpec("input_lose", "Calm", "entree appelee sur OnLosePlayer"),
+                    new PropertySpec("input_goal", "Reached", "entree appelee sur OnReachGoal"),
                 },
 
                 [EntityTypes.Waypoint] = new[]
@@ -115,11 +128,76 @@ namespace Exarion.Core.Editor
                     new PropertySpec("speed", "2", "vitesse de la course, m/s"),
                     new PropertySpec("width", "2", "taille en X"),
                     new PropertySpec("height", "3", "taille en Y"),
-                    new PropertySpec("depth", "0.2", "taille en Z"),
+                    new PropertySpec("depth", "0.3", "taille en Z"),
                     new PropertySpec("wait", "0", "secondes avant refermeture. 0 = reste ouverte"),
                     new PropertySpec("start_open", "0", "1 = commence ouverte"),
                     new PropertySpec("target_open", "", "entite a actionner sur OnOuvert"),
+                    new PropertySpec("input_open", "Trigger", "entree envoyee sur OnOuvert"),
                     new PropertySpec("target_close", "", "entite a actionner sur OnFerme"),
+                    new PropertySpec("input_close", "Trigger", "entree envoyee sur OnFerme"),
+                    new PropertySpec("blocked", "reverse", "si quelqu'un gene : reverse, stop ou push"),
+                    new PropertySpec("target_blocked", "", "entite a actionner sur OnBloque"),
+                    new PropertySpec("input_blocked", "Trigger", "entree envoyee sur OnBloque"),
+                },
+
+                // Relevees dans CrateStacks.From, defauts compris.
+                [EntityTypes.Crate] = new[]
+                {
+                    new PropertySpec("size", "0.9", "cote de chaque caisse, en metres"),
+                    new PropertySpec("mass", "18", "masse de chaque caisse, en kilos"),
+                    new PropertySpec("count", "1", "nombre de caisses empilees"),
+                },
+
+                // Aucune propriete : la position et le lacet de l'entite
+                // suffisent. Le type est connu pour que le panneau ne le traite
+                // pas comme une entite d'une version future.
+                [EntityTypes.Mannequin] = Array.Empty<PropertySpec>(),
+
+                // Relevees dans LogicNode et LogicWorld.Enqueue.
+                [EntityTypes.LogicRelay] = new[]
+                {
+                    new PropertySpec("name", "", "OBLIGATOIRE pour recevoir Declencher"),
+                    new PropertySpec("target", "", "entite a actionner sur OnDeclenche"),
+                    new PropertySpec("input", "Trigger", "entree envoyee a la cible"),
+                    new PropertySpec("delay", "0", "secondes avant de relayer. 0 = au pas suivant"),
+                    new PropertySpec("once", "0", "1 = se desactive apres un declenchement"),
+                    new PropertySpec("start_disabled", "0", "1 = commence desactive (Activer)"),
+                },
+
+                [EntityTypes.LogicTimer] = new[]
+                {
+                    new PropertySpec("name", "", "nom, pour etre demarree ou arretee"),
+                    new PropertySpec("target", "", "entite a actionner sur OnMinuterie"),
+                    new PropertySpec("input", "Trigger", "entree envoyee a la cible"),
+                    new PropertySpec("interval", "1", "secondes entre deux sorties"),
+                    new PropertySpec("start_disabled", "0", "1 = arretee au depart (Demarrer)"),
+                },
+
+                [EntityTypes.LogicCounter] = new[]
+                {
+                    new PropertySpec("name", "", "OBLIGATOIRE pour recevoir Ajouter"),
+                    new PropertySpec("target", "", "entite a actionner sur OnMax"),
+                    new PropertySpec("input", "Trigger", "entree envoyee a la cible"),
+                    new PropertySpec("max", "3", "valeur ou il emet OnMax"),
+                    new PropertySpec("start", "0", "valeur de depart et de Remettre"),
+                },
+
+                // Relevees dans EnvLight et EnvSound.
+                [EntityTypes.EnvLight] = new[]
+                {
+                    new PropertySpec("name", "", "OBLIGATOIRE pour Allumer / Eteindre"),
+                    new PropertySpec("color", "1,0.85,0.6", "r,g,b LINEAIRE, separes par des virgules"),
+                    new PropertySpec("intensity", "120", "comme une lumiere de carte : 1/d2 est brutal"),
+                    new PropertySpec("range", "16", "portee, en metres"),
+                    new PropertySpec("start_off", "0", "1 = eteinte au depart"),
+                },
+
+                [EntityTypes.EnvSound] = new[]
+                {
+                    new PropertySpec("name", "", "OBLIGATOIRE pour Jouer / Arreter"),
+                    new PropertySpec("hz", "220", "hauteur du bip, de 20 a 12 000 Hz"),
+                    new PropertySpec("volume", "0.5", "de 0 a 1, avant la distance"),
+                    new PropertySpec("start_on", "0", "1 = joue des le depart"),
                 },
             };
 

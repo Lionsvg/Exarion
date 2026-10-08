@@ -1,0 +1,56 @@
+exarion_map 3
+# Carte de demonstration du CALCUL DE CHEMIN (E16, 08/10).
+#
+# Un garde fait sa ronde entre deux points qu'AUCUNE ligne droite ne relie :
+# l'un derriere un mur de 20 m, l'autre sur une estrade de 1,80 m qu'on ne
+# monte que par un escalier, sur son flanc est. Avant E16, il butait dans le
+# mur et y restait.
+#
+# A regarder avec « nav_show 1 » (le chemin, en lattes bleues) et le HUD
+# (altitude du garde, et « CHEMIN i/n »). « nav_enabled 0 » rejoue la ligne
+# droite d'avant, sur la meme carte, pour comparer.
+#
+# Ecrite A LA MAIN, comme formes.map.
+
+name chemins
+
+# Le joueur regarde depuis la tribune, au sud-est : toute la ronde est dans
+# le champ, et le garde ne le voit pas (sight=0).
+spawn 15 8 15 45 -28
+
+# --- Sol, et la tribune d'ou l'on regarde ---------------------------------
+
+box 0 -0.5 0     40 1 40    0.30 0.31 0.34
+box 15 4 15      3 8 3      0.36 0.34 0.32
+
+# --- Le mur qui coupe la ronde --------------------------------------------
+
+box 0 1.5 0      20 3 0.5   0.55 0.36 0.30
+
+# --- L'estrade, et son escalier sur le flanc est --------------------------
+#
+# Six marches de 30 cm, sous la marche franchissable de 45 cm. Elles montent
+# vers le nord ; la derniere est au niveau du dessus de l'estrade.
+
+box 0 0.9 -10    8 1.8 6    0.40 0.46 0.58
+
+box 5 0.15 -7.5  2 0.3 1    0.52 0.50 0.44
+box 5 0.3 -8.5   2 0.6 1    0.52 0.50 0.44
+box 5 0.45 -9.5  2 0.9 1    0.52 0.50 0.44
+box 5 0.6 -10.5  2 1.2 1    0.52 0.50 0.44
+box 5 0.75 -11.5 2 1.5 1    0.52 0.50 0.44
+box 5 0.9 -12.5  2 1.8 1    0.52 0.50 0.44
+
+# --- La ronde ---------------------------------------------------------------
+
+entity info_waypoint   0 1.8 -10   0 0   path=haut order=0
+entity info_waypoint   0 0 8       0 0   path=haut order=1
+
+entity npc_dummy       0 0 8   180 0   name=garde behaviour=patrol path=haut speed=3 sight=0
+
+# --- Lumieres ---------------------------------------------------------------
+
+light_dir -0.35 -1 -0.25   0.62 0.70 0.85   1.6
+
+light_point  0 5 -10    1 0.85 0.6    120 18
+light_point  8 4 4      0.6 0.8 1     90 16

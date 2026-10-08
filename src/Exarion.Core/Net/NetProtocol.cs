@@ -64,6 +64,42 @@ namespace Exarion.Core.Net
         public const byte HitReport = 10;
     }
 
+    /// <summary>Drapeaux d'un HitReport.</summary>
+    public static class HitReportFlags
+    {
+        /// <summary>Le rembobinage a change le verdict : sans lui, ce tir n'aurait pas eu le meme sort.</summary>
+        public const byte RewindMattered = 1;
+
+        /// <summary>Tir REFUSE : son origine etait trop loin du tireur (voir NetServer.MaxShotOriginDrift).</summary>
+        public const byte Rejected = 2;
+    }
+
+    /// <summary>Le verdict du serveur sur un tir, tel que le tireur le recoit.</summary>
+    public readonly struct ShotReport
+    {
+        public readonly uint ShotId;
+
+        /// <summary>Joueur touche, ou 0.</summary>
+        public readonly byte VictimId;
+
+        public readonly System.Numerics.Vector3 Point;
+        public readonly float Distance;
+        public readonly bool RewindMattered;
+        public readonly bool Rejected;
+
+        public bool Hit => VictimId != 0;
+
+        public ShotReport(uint shotId, byte victimId, System.Numerics.Vector3 point, float distance, byte flags)
+        {
+            ShotId = shotId;
+            VictimId = victimId;
+            Point = point;
+            Distance = distance;
+            RewindMattered = (flags & HitReportFlags.RewindMattered) != 0;
+            Rejected = (flags & HitReportFlags.Rejected) != 0;
+        }
+    }
+
     public static class NetConfig
     {
         /// <summary>
@@ -74,8 +110,11 @@ namespace Exarion.Core.Net
         /// des octets qui ne veulent plus rien dire : le defaut se manifeste
         /// comme des joueurs qui tremblent ou volent, et on cherche dans le
         /// netcode au lieu de la version.
+        ///
+        /// 2 (08/10) : le Welcome porte l'EMPREINTE de la carte du serveur.
+        /// 3 (08/10) : Fire et HitReport ont un format - le tir est arbitre.
         /// </summary>
-        public const ushort Version = 1;
+        public const ushort Version = 3;
 
         /// <summary>
         /// Taille maximale d'un paquet, en octets.

@@ -29,6 +29,7 @@
 // ===========================================================================
 
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using Exarion.Core.Assets;
 using Exarion.Core.Physics;
@@ -144,6 +145,13 @@ namespace Exarion.Core.Entities
                 _fraction = 1f;
                 State = MoverState.Ouvert;
             }
+
+            Blocked = entity.Get("blocked", "reverse").Trim().ToLowerInvariant() switch
+            {
+                "stop" => BlockPolicy.Stop,
+                "push" => BlockPolicy.Push,
+                _ => BlockPolicy.Reverse,
+            };
 
             _previousCenter = Center;
         }
@@ -265,7 +273,11 @@ namespace Exarion.Core.Entities
         /// s'accumule, pas une fonction du temps. La simuler au rendu ferait
         /// dependre sa vitesse du nombre d'images par seconde.
         /// </summary>
-        public void Step(float dt)
+        /// <param name="blockers">
+        /// Ce qui ne doit pas etre traverse : joueur, PNJ, caisses. Null : rien
+        /// ne bloque (le comportement d'avant le 08/10).
+        /// </param>
+        public void Step(float dt, IReadOnlyList<Aabb>? blockers = null)
         {
             PendingOutput = "";
             _previousCenter = Center;
@@ -278,7 +290,17 @@ namespace Exarion.Core.Entities
                 switch (State)
                 {
                     case MoverState.Ouverture:
-                        _fraction += step;
+                    {
+                        float next = MathF.Min(1f, _fraction + step);
+
+                        if (WouldHit(next, blockers))
+                        {
+                            OnBlock();
+                            break;
+                        }
+
+                        _wasBlocked = false;
+                        _fraction = next;
 
                         if (_fraction >= 1f)
                         {
@@ -288,9 +310,20 @@ namespace Exarion.Core.Entities
                             _waitLeft = Wait;
                         }
                         break;
+                    }
 
                     case MoverState.Fermeture:
-                        _fraction -= step;
+                    {
+                        float next = MathF.Max(0f, _fraction - step);
+
+                        if (WouldHit(next, blockers))
+                        {
+                            OnBlock();
+                            break;
+                        }
+
+                        _wasBlocked = false;
+                        _fraction = next;
 
                         if (_fraction <= 0f)
                         {
@@ -299,6 +332,7 @@ namespace Exarion.Core.Entities
                             PendingOutput = OnFullyClosed;
                         }
                         break;
+                    }
 
                     // ⚠️⚠️ CE « when » EST CE QUI PROTEGE LA FERMETURE AUTOMATIQUE,
                     // et je l'ai d'abord attribue au mauvais endroit du code.
@@ -324,6 +358,85 @@ namespace Exarion.Core.Entities
             }
 
             Delta = Center - _previousCenter;
+        }
+
+        // ------------------------------------------------------------------
+        //  BLOCAGE (08/10)
+        //
+        //  Avant, une porte avancait sans regarder : refermee sur le joueur,
+        //  elle le CHEVAUCHAIT, et c'etait au CharacterMotor de l'en sortir. Une
+        //  porte de Source repart en arriere. C'est le defaut ici aussi - et
+        //  l'ancien comportement reste disponible (blocked=push).
+        // ------------------------------------------------------------------
+
+        /// <summary>Sortie emise quand la course est BLOQUEE par quelqu'un. Une fois par blocage.</summary>
+        public const string OnBlocked = "OnBloque";
+
+        /// <summary>Que faire quand la course rencontre quelqu'un.</summary>
+        public enum BlockPolicy
+        {
+            /// <summary>Repartir dans l'autre sens - la porte de Source. Defaut.</summary>
+            Reverse,
+
+            /// <summary>Attendre sur place que la voie se libere.</summary>
+            Stop,
+
+            /// <summary>Passer quand meme : le comportement d'avant le 08/10.</summary>
+            Push,
+        }
+
+        /// <summary>« blocked » : reverse (defaut), stop, push. Un mot inconnu retombe sur reverse.</summary>
+        public BlockPolicy Blocked { get; }
+
+        private bool _wasBlocked;
+
+        /// <summary>La course, poursuivie jusqu'a cette fraction, toucherait-elle quelqu'un ?</summary>
+        private bool WouldHit(float fraction, IReadOnlyList<Aabb>? blockers)
+        {
+            if (blockers is null || Blocked == BlockPolicy.Push)
+                return false;
+
+            Aabb next = Aabb.FromCenterSize(Vector3.Lerp(ClosedCenter, OpenCenter, fraction), Size);
+            Aabb now = Box;
+
+            for (int i = 0; i < blockers.Count; i++)
+            {
+                if (!next.Intersects(blockers[i]))
+                    continue;
+
+                // ⚠️⚠️ CE QU'ON CHEVAUCHE DEJA N'EST PAS UN OBSTACLE. Trouve en
+                // jeu, pas en test : un joueur teleporte DANS une porte fermee
+                // la bloquait a l'ouverture - la position suivante le
+                // chevauchait encore, la porte repartait, se rebloquait, et
+                // oscillait sur place sans jamais s'ouvrir. Une porte doit
+                // toujours pouvoir S'ELOIGNER de ce qu'elle touche ; seul ce que
+                // la course touche NOUVELLEMENT l'arrete.
+                if (now.Intersects(blockers[i]))
+                    continue;
+
+                // ⚠️ Un PASSAGER n'est pas un obstacle : sinon tout ascenseur se
+                // figerait des qu'on monte dessus.
+                if (Carries(blockers[i]))
+                    continue;
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private void OnBlock()
+        {
+            // ⚠️ UNE sortie par blocage, pas une par pas : en mode stop, une
+            // porte qui attend emettrait sinon OnBloque 64 fois par seconde -
+            // la classe de defaut des volumes sans memoire (E13).
+            if (!_wasBlocked)
+                PendingOutput = OnBlocked;
+
+            _wasBlocked = true;
+
+            if (Blocked == BlockPolicy.Reverse)
+                State = State == MoverState.Ouverture ? MoverState.Fermeture : MoverState.Ouverture;
         }
 
         /// <summary>

@@ -461,10 +461,63 @@ namespace Exarion.Core.Assets
         /// </summary>
         public const string Door = "func_door";
 
+        /// <summary>
+        /// Une pile de caisses dynamiques, posee au sol a l'emplacement de
+        /// l'entite. Proprietes : size, mass, count.
+        ///
+        /// ⚠️ C'EST LA CARTE QUI DECLARE SES CAISSES. Jusqu'au 07/10, le bac a
+        /// sable en lachait quatre en (0, 0, 8) apres TOUTE carte chargee : sur
+        /// une carte qui n'en voulait pas, elles tombaient devant le point de
+        /// depart, s'endormaient aussitot, et l'assombrissement du sommeil en
+        /// faisait un pilier noir plante devant le joueur.
+        /// </summary>
+        public const string Crate = "prop_crate";
+
+        /// <summary>
+        /// Le personnage anime decoratif, s'il y a un modele glTF. Le lacet de
+        /// l'entite est la direction ou il regarde. Sans cette entite, la carte
+        /// n'a pas de mannequin - il apparaissait sur toutes, au meme endroit.
+        /// </summary>
+        public const string Mannequin = "prop_mannequin";
+
+        /// <summary>
+        /// Relais : recoit « Declencher » et emet OnDeclenche vers sa cible,
+        /// apres « delay » secondes. Proprietes : name, target, input, delay,
+        /// once, start_disabled. Entrees : Declencher, Activer, Desactiver,
+        /// Basculer, Annuler. Voir LogicWorld.
+        /// </summary>
+        public const string LogicRelay = "logic_relay";
+
+        /// <summary>
+        /// Minuterie : emet OnMinuterie toutes les « interval » secondes.
+        /// Entrees : Demarrer, Arreter, Basculer, Declencher.
+        /// </summary>
+        public const string LogicTimer = "logic_timer";
+
+        /// <summary>
+        /// Compteur : « Ajouter » jusqu'a « max », ou il emet OnMax.
+        /// Entrees : Ajouter, Retirer, Remettre.
+        /// </summary>
+        public const string LogicCounter = "logic_counter";
+
+        /// <summary>
+        /// Lumiere ponctuelle COMMUTABLE. Proprietes : name, color (r,g,b
+        /// lineaire, virgules), intensity, range, start_off. Entrees :
+        /// Allumer, Eteindre, Basculer. Voir EnvWorld.
+        /// </summary>
+        public const string EnvLight = "env_light";
+
+        /// <summary>
+        /// Bip en boucle, place dans le monde. Proprietes : name, hz, volume,
+        /// start_on. Entrees : Jouer, Arreter, Basculer.
+        /// </summary>
+        public const string EnvSound = "env_sound";
+
         /// <summary>Tous les types connus, dans l'ordre ou l'editeur les propose.</summary>
         public static readonly string[] All =
         {
-            PlayerSpawn, Checkpoint, Trigger, Npc, Waypoint, Door,
+            PlayerSpawn, Checkpoint, Trigger, Npc, Waypoint, Door, Crate, Mannequin,
+            LogicRelay, LogicTimer, LogicCounter, EnvLight, EnvSound,
         };
     }
 }

@@ -181,6 +181,36 @@ namespace Exarion.Tests
             ClassicAssert.AreEqual("hall", world.Checkpoints[0]);
         }
 
+        /// <summary>
+        /// ⚠️ Le meme test SANS NOM ni ordre - le cas que le precedent ne
+        /// couvrait pas. Le nom de repli valait le nombre de checkpoints deja
+        /// franchis : « 0 » au premier passage, « 1 » au second, et le meme
+        /// checkpoint comptait double. Deux checkpoints anonymes, eux, doivent
+        /// rester deux.
+        /// </summary>
+        [Test]
+        public void Un_Checkpoint_SANS_NOM_Ne_Compte_Qu_Une_Fois_Non_Plus()
+        {
+            var map = new MapData();
+            map.Entities.Add(new MapEntity(EntityTypes.Checkpoint, new Vector3(0f, 1f, 0f)).Set("size", "3"));
+            map.Entities.Add(new MapEntity(EntityTypes.Checkpoint, new Vector3(20f, 1f, 0f)).Set("size", "3"));
+
+            var world = new EntityWorld();
+            world.Load(map);
+
+            for (int i = 0; i < 3; i++)
+            {
+                world.Update(Player(Vector3.Zero));
+                world.Update(Player(new Vector3(50f, 0f, 0f)));
+            }
+
+            ClassicAssert.AreEqual(1, world.Checkpoints.Count, string.Join(",", world.Checkpoints));
+
+            world.Update(Player(new Vector3(20f, 0f, 0f)));
+
+            ClassicAssert.AreEqual(2, world.Checkpoints.Count, "deux checkpoints anonymes sont deux checkpoints");
+        }
+
         [Test]
         public void Les_Checkpoints_Sont_Dans_L_Ordre_DE_PASSAGE()
         {

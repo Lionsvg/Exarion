@@ -45,13 +45,14 @@ namespace Exarion.Core.Entities
         public void Clear() => _movers.Clear();
 
         /// <summary>Fait avancer tous les movers. Au pas fixe.</summary>
-        public void Step(float dt)
+        /// <param name="blockers">Joueur, PNJ, caisses : ce qu'une porte ne doit pas traverser. Voir Mover.Blocked.</param>
+        public void Step(float dt, IReadOnlyList<Aabb>? blockers = null)
         {
             MovingCount = 0;
 
             for (int i = 0; i < _movers.Count; i++)
             {
-                _movers[i].Step(dt);
+                _movers[i].Step(dt, blockers);
 
                 if (_movers[i].State is MoverState.Ouverture or MoverState.Fermeture)
                     MovingCount++;
@@ -195,6 +196,49 @@ namespace Exarion.Core.Entities
 
             for (int i = 0; i < _movers.Count; i++)
                 world.Register(_movers[i]);
+        }
+
+        /// <summary>Entree envoyee par OnOuvert / OnFerme quand la carte n'en declare pas.</summary>
+        public const string DefaultOutputInput = "Trigger";
+
+        /// <summary>
+        /// Livre les sorties de fin de course du dernier pas (OnOuvert, OnFerme)
+        /// et rapporte chacune avec ce qu'elle est devenue.
+        ///
+        /// La cible d'une fin de course se declare A PART (target_open,
+        /// target_close) : une porte qui viserait « target » se re-viserait
+        /// elle-meme en boucle.
+        ///
+        /// ⚠️ Vivait dans le jeu (GameWorld) jusqu'au 08/10 : la livraison ne
+        /// se testait donc pas en ligne de commande, et le defaut affiche par
+        /// le panneau pour input_open ne pouvait etre confronte a rien.
+        /// </summary>
+        public void DeliverOutputs(EntityWorld router, Action<EntityEvent> report)
+        {
+            ArgumentNullException.ThrowIfNull(router);
+            ArgumentNullException.ThrowIfNull(report);
+
+            for (int i = 0; i < _movers.Count; i++)
+            {
+                Mover mover = _movers[i];
+                string output = mover.PendingOutput;
+
+                if (output.Length == 0)
+                    continue;
+
+                // Trois sorties, trois cibles : ouverte, fermee, BLOQUEE.
+                (string targetKey, string inputKey) = output switch
+                {
+                    Mover.OnFullyOpen => ("target_open", "input_open"),
+                    Mover.OnBlocked => ("target_blocked", "input_blocked"),
+                    _ => ("target_close", "input_close"),
+                };
+
+                string target = mover.Entity.Get(targetKey);
+                string input = mover.Entity.Get(inputKey, DefaultOutputInput);
+
+                report(new EntityEvent(mover.Entity, output, target, input, router.Send(target, input)));
+            }
         }
     }
 }

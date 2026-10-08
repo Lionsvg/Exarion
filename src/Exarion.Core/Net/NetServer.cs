@@ -48,7 +48,36 @@ namespace Exarion.Core.Net
 
             public double LastHeard;
             public bool WantsSnapshot;
+
+            /// <summary>Ou il etait, pas par pas, pour le rembobinage (3.7).</summary>
+            public readonly PlayerHistory History = new();
         }
+
+        /// <summary>
+        /// Distance maximale entre l'origine annoncee d'un tir et l'oeil du
+        /// tireur cote serveur.
+        ///
+        /// ⚠️ TOUT CE QUI VIENT DU RESEAU EST HOSTILE. Un client modifie qui
+        /// annonce un tir parti de l'autre bout de la carte toucherait n'importe
+        /// qui. 1,5 m couvre l'ecart honnete : la prediction du client devance le
+        /// serveur d'un aller-retour, soit 50 cm a la course a 100 ms de ping.
+        /// </summary>
+        public const float MaxShotOriginDrift = 1.5f;
+
+        /// <summary>Portee d'un tir arbitre. La meme que le tir local du bac a sable.</summary>
+        public const float MaxShotDistance = 250f;
+
+        /// <summary>L'oeil est a cette distance sous le sommet du corps (comme GameWorld.EyePosition).</summary>
+        private const float EyeBelowTop = 0.18f;
+
+        private readonly List<byte> _shotIds = new();
+        private readonly List<PlayerHistory> _shotHistories = new();
+
+        /// <summary>Tirs recus, touches, decides par le rembobinage, refuses. Pour MESURER 3.7 en vrai.</summary>
+        public int ShotsReceived { get; private set; }
+        public int ShotsHit { get; private set; }
+        public int ShotsRewindDecisive { get; private set; }
+        public int ShotsRejected { get; private set; }
 
         private readonly INetTransport _transport;
         private readonly List<Client> _clients = new();
@@ -92,9 +121,29 @@ namespace Exarion.Core.Net
         /// trancherait en faveur du sien sans que le client comprenne pourquoi
         /// il traverse un mur.
         /// </summary>
-        public void LoadMap(MapData map)
+        /// <summary>
+        /// Empreinte de la carte servie (MapFile.Fingerprint), envoyee dans le
+        /// Welcome : le client verifie qu'il joue sur CE decor, pas seulement
+        /// sur une carte du meme nom.
+        /// </summary>
+        public uint MapFingerprint { get; private set; } = MapFile.Fingerprint(new MapData());
+
+        /// <summary>
+        /// Le nom ANNONCE au client, par lequel il cherchera la carte chez lui.
+        ///
+        /// ⚠️ Le nom de FICHIER quand la carte vient d'un fichier, pas le nom
+        /// ecrit dedans. Constate le 08/10 : « arene.map » porte le nom « bac a
+        /// sable » (elle a ete enregistree depuis le bac a sable). Annoncer le
+        /// nom interne envoyait le client chercher « bac_a_sable.map », qui
+        /// n'est pas le meme fichier - ou n'existe pas.
+        /// </summary>
+        public string MapName { get; private set; } = "";
+
+        public void LoadMap(MapData map, string? announcedName = null)
         {
             _map = map ?? throw new ArgumentNullException(nameof(map));
+            MapFingerprint = MapFile.Fingerprint(map);
+            MapName = string.IsNullOrWhiteSpace(announcedName) ? map.Name : announcedName;
 
             // La liste de couleurs ne sert qu'au rendu ; le serveur n'affiche
             // rien. On la jette, mais on doit la fournir - c'est ce qui garantit
@@ -135,6 +184,12 @@ namespace Exarion.Core.Net
         {
             Receive(time);
             Simulate(dt);
+
+            // L'historique est date du MEME pas que l'instantane qui part : le
+            // client rembobinera sur l'echelle des instantanes qu'il a recus.
+            foreach (Client client in _clients)
+                client.History.Record(Tick, client.Motor.Position, client.Motor.Height);
+
             Broadcast(time);
 
             Tick++;
@@ -166,6 +221,7 @@ namespace Exarion.Core.Net
                 case NetMessage.Input: OnInput(packet.From, ref reader, time); break;
                 case NetMessage.Bye: Remove(packet.From); break;
                 case NetMessage.Ping: OnPing(packet.From, ref reader); break;
+                case NetMessage.Fire: OnFire(packet.From, ref reader); break;
 
                 // ⚠️ Un type inconnu est IGNORE, pas fatal. Le paquet peut venir
                 // d'une autre version, d'un scanner de ports, ou de n'importe
@@ -259,6 +315,83 @@ namespace Exarion.Core.Net
                 client.WantsSnapshot = true;
                 InputsApplied++;
             }
+        }
+
+        /// <summary>
+        /// Un tir. Le SERVEUR tranche, en rembobinant les autres joueurs a
+        /// l'instant que le tireur voyait (3.7) - et renvoie le verdict au
+        /// tireur. C'est le dernier fil de la phase 3 : jusqu'au 08/10 le tir du
+        /// bac a sable restait local, et LagCompensation n'etait appelee par
+        /// personne.
+        /// </summary>
+        private void OnFire(NetAddress from, ref NetReader reader)
+        {
+            Client? shooter = Find(from);
+
+            if (shooter is null)
+                return;
+
+            uint shotId = reader.UInt();
+            uint viewWhole = reader.UInt();
+            float viewFraction = reader.Float();
+            Vector3 origin = reader.Vector3();
+            Vector3 direction = reader.Vector3();
+
+            if (reader.Failed)
+                return;
+
+            ShotsReceived++;
+
+            byte flags = 0;
+            ShotResult result = ShotResult.Miss;
+
+            Vector3 eye = shooter.Motor.Position + new Vector3(0f, shooter.Motor.Height - EyeBelowTop, 0f);
+
+            if (Vector3.Distance(origin, eye) > MaxShotOriginDrift)
+            {
+                // Tir REFUSE, et dit comme tel : un client honnete qui tomberait
+                // ici a un probleme de prediction qu'il faut voir, pas un tir rate.
+                flags |= HitReportFlags.Rejected;
+                ShotsRejected++;
+            }
+            else
+            {
+                // Jamais le futur : un client ne peut pas avoir vu un pas que le
+                // serveur n'a pas encore joue.
+                double view = Math.Min(viewWhole + (double)Math.Clamp(viewFraction, 0f, 1f), Tick);
+
+                _shotIds.Clear();
+                _shotHistories.Clear();
+
+                foreach (Client client in _clients)
+                {
+                    _shotIds.Add(client.Id);
+                    _shotHistories.Add(client.History);
+                }
+
+                result = LagCompensation.Resolve(shooter.Id, origin, direction, MaxShotDistance,
+                                                 _shotIds, _shotHistories, view, _world);
+
+                if (result.Hit)
+                    ShotsHit++;
+
+                if (result.RewindMattered)
+                {
+                    flags |= HitReportFlags.RewindMattered;
+                    ShotsRewindDecisive++;
+                }
+            }
+
+            var writer = new NetWriter(_out);
+
+            writer.Byte(NetMessage.HitReport);
+            writer.UInt(shotId);
+            writer.Byte(result.VictimId);
+            writer.Vector3(result.Point);
+            writer.Float(result.Distance);
+            writer.Byte(flags);
+
+            SendTo(shooter.Address, ref writer);
         }
 
         private void OnPing(NetAddress from, ref NetReader reader)
@@ -380,7 +513,8 @@ namespace Exarion.Core.Net
             writer.UShort(NetConfig.Version);
             writer.Byte(client.Id);
             writer.Float(FixedDelta);
-            writer.ShortString(_map.Name);
+            writer.ShortString(MapName);
+            writer.UInt(MapFingerprint);
             writer.Vector3(client.Motor.Position);
 
             SendTo(client.Address, ref writer);

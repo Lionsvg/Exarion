@@ -54,6 +54,16 @@ licences, et elle ne bouge pas.
    l'impose par sa section 4(d) — le `NOTICE` doit suivre toute redistribution. ⚠️ Elle
    n'impose PAS un crédit **à l'écran** : un fichier texte livré avec le jeu suffit.
 
+   📏 **v0.1.0 publiée le 07/10/2026** (release, code source seul, pas d'exécutable — choix de
+   l'utilisateur). Le zip téléchargé depuis GitHub, décompressé dans un dossier vierge :
+   **563 tests réussis, 22 ignorés, 0 échec** — les 22 sont ceux du personnage. 151 fichiers,
+   aucun `.glb`. Bac à sable, carte à PNJ et jeu d'exemple lancés depuis l'instantané : capture
+   écrite, aucun plantage.
+   ⚠️⚠️ **Sans Model3D, les PNJ et les joueurs distants sont INVISIBLES** : simulés (le HUD
+   montre le garde à 2,2 m/s) mais `Program.cs` sort avant de les dessiner quand
+   `_characterModel` est nul. Constaté sur la version publique, documenté dans le README.
+   Il manque un rendu de repli — la silhouette de primitives de l'éditeur existe déjà.
+
 ## Historique — pourquoi on en est là
 
 | Moteur | Écarté parce que |
@@ -65,12 +75,72 @@ licences, et elle ne bouge pas.
 Ce qui a survécu aux trois changements : la doc, et la logique de jeu en C# pur.
 **C'est la preuve que la règle n°1 est la bonne.**
 
-## État vérifié (dernière mise à jour : 17/08/2026)
+## État vérifié (dernière mise à jour : 08/10/2026)
 
 ```
-585 tests au vert  ·  0 erreur  ·  0 avertissement dans src/
+703 tests au vert  ·  0 erreur  ·  0 avertissement dans src/
 0,557 ms de GPU par image (1280x720)  ·  64 pas/s  ·  physique 0,17 ms au repos
+Program.cs : 84 lignes (5 156 avant la refonte du 07/10)
 ```
+
+## Refonte du 07/10/2026 — le bac à sable éclaté, sans changer UN pixel
+
+**Program.cs faisait 5 156 lignes**, une seule classe statique, ~140 champs statiques, et une
+méthode `RegisterConsole` de 1 000 lignes. Il fait 84 lignes : `Main` et le rapport de plantage.
+Tout le reste est dans `src/Exarion.Game/`, une responsabilité par dossier :
+
+| Dossier | Contenu |
+|---|---|
+| `SandboxApp.cs` | **orchestre** : crée les sous-systèmes, déroule chargement / pas / image dans l'ordre d'origine |
+| `World/` | `GameWorld` (carte, décor, physique, joueur, entités, PNJ, portes — aucun appel GL), `SandboxMap`, `EventFeed` |
+| `Gameplay/` | `PlayerController` (regard, entrée, tir, caisses), `SandboxFx` (particules + générateur unique), `Aim` |
+| `Editing/` | `EditorController`, `EditorView` (aides, surcouche, panneau), `EditorGrid` |
+| `Rendering/` | `SandboxScene` (`IWorldRenderer`), `CharacterRig`, `MarkerRenderer`, `SceneLighting`, `RenderSettings` |
+| `Ui/` | `MenuScreen`, `SandboxHud`, `Screenshots` |
+| `Sound/`, `Networking/`, `Input/`, `Diagnostics/` | `SandboxAudio`, `NetSession`, `InputDevices`, `PerfMonitor` |
+| `Commands/` | la console, **une famille par fichier** (`PlayerCommands`, `RenderCommands`, `EditorCommands`…) |
+
+`MapLibrary` (dossier des cartes, noms de fichiers sûrs) est descendu dans **Core**, avec 11 tests.
+
+📏 **La preuve est l'outil `tools/ab-captures.ps1`**, écrit pour l'occasion : huit scénarios
+headless, l'inventaire COMPLET de la console (valeur, défaut, bornes, description de chaque
+entrée) et une session scriptée de 70 commandes, comparés à une copie figée du dépôt (`git
+worktree`). Après les 9 étapes, contre le commit d'avant la refonte : **7 scénarios identiques
+au bit près, console identique ligne à ligne.** Chaque étape a été commitée et poussée séparément.
+
+⚠️⚠️ **L'ORDRE D'INITIALISATION DES CHAMPS STATIQUES ÉTAIT UN PIÈGE ACTIF.** Pendant la refonte,
+un champ comme `_world = new GameWorld(_fx.Particles)` placé AVANT `_fx` dans le fichier
+recevait `null` en silence. `SandboxApp` est une INSTANCE qui crée tout dans son constructeur,
+dans un ordre explicite : le piège a disparu avec les champs statiques.
+
+### Sept défauts trouvés EN DÉPLAÇANT le code — tous corrigés, tous mesurés
+
+| Défaut | Depuis | Preuve |
+|---|---|---|
+| **L'occlusion sonore ne voyait AUCUN mur** : `AudioWorld.World` gardait le monde vide du démarrage | 4.2 | 6 kHz derrière un pilier : RMS 0,0299 / 0,0301 (×1,0) → **0,0017 / 0,0307 (×18)** |
+| **`gravity` et `phys_*` perdus au changement de carte** : le joueur à 20, les caisses à 15,24 | R4 | commande `phys` avant / après `map_load` |
+| **Les `--exec` se taisaient après 200 lignes** (tampon de console borné) | 2.4 | 126 `help` → 66 réponses avant, **126** après |
+| **Les 4 caisses et le mannequin sur TOUTES les cartes** (le « pilier noir ») | 17/08 | `portes` : CAISSES 4 → 0, la porte redevient visible |
+| **Les PNJ couraient À RECULONS** : pas de demi-tour modèle/moteur, contrairement aux joueurs distants | E14 | capture : un garde en poursuite montrait son DOS |
+| **Sans modèle, PNJ et joueurs distants INVISIBLES** | E14 | silhouette de primitives, ombre comprise |
+| **Ombres de PNJ dans l'éditeur**, où les corps sont cachés | E14 | passe d'ombre et passe finale lisent la même liste |
+
+⚠️ **Le deuxième et le troisième sont le MÊME piège que les ConVar de la SSAO et de
+`snd_volume`** : un objet recréé (monde physique, monde de collision) que la valeur réglée ne
+suit pas. La commande **`phys`** affiche les réglages EFFECTIFS, lus sur le monde courant — c'est
+l'écart entre elle et la ConVar qui trahit le défaut.
+
+⚠️ **L'outil A/B a lui-même menti DEUX fois**, et c'est noté pour ne pas recommencer. Sa première
+version annonçait l'inventaire de la console « identique » alors qu'elle n'en comparait que 66
+entrées sur 125 (le tampon de 200 lignes, encore) : il vérifie désormais que la DERNIÈRE commande
+de chaque lancement a répondu. Puis, le 08/10 : un écart de **pixels** s'affichait en jaune sans
+compter dans le code de sortie — l'outil rendait 0 sur une image différente. Il rend maintenant 2
+dès qu'un écart existe, bruit des particules compris : le code dit qu'il y a quelque chose à
+juger, chaque écart se juge contre `-Bruit`.
+
+✅ **Nouveaux types d'entités** : `prop_crate` (`size`, `mass`, `count` — une pile posée au sol)
+et `prop_mannequin`. Éditeur : **F8** caisses, **F9** mannequin. Le décor intégré les déclare
+aux coordonnées d'avant, d'où des captures identiques au bit près.
 
 ✅ **Le moteur a un SECOND client depuis le 17/08** — `samples/Exarion.Sample`, 187 lignes,
 qui ne référence que `Exarion.Core` et `Exarion.Engine`. Vérifié par capture : carte chargée,
@@ -121,12 +191,9 @@ Si la jambe d'attaque saute quand on bouge `character_blend`, mettre `character_
   l'appelle. Sa limite est connue : il part d'une **pose figée**, visible au-delà de 0,5 s.
 - **Débordement du réservoir de particules.** `Dropped` est testé, jamais atteint en jeu.
 
-⚠️ **Les 4 caisses de départ ne font PAS partie de la carte.** Constaté le 17/08 sur
-`maps/essai.map` : elles se posent au centre, juste devant le point de départ, et comme elles
-s'endorment aussitôt elles sont assombries — ça ressemble à un pilier noir planté devant le
-joueur. Le chargeur de carte n'y est pour rien (`crates clear` fait disparaître la colonne),
-mais **toute nouvelle carte héritera du problème**. Soit la carte doit pouvoir déclarer ses
-caisses, soit elles doivent naître relativement au `spawn`.
+✅ ~~**Les 4 caisses de départ ne font PAS partie de la carte.**~~ **Corrigé le 07/10** : une
+carte déclare ses caisses (`prop_crate`) et son mannequin (`prop_mannequin`), le décor intégré
+déclare les siens. Voir la refonte du 07/10 en tête de fichier.
 
 ## 3. Non mesuré — et je le dis plutôt que de laisser croire
 
@@ -160,14 +227,17 @@ caisses, soit elles doivent naître relativement au `spawn`.
 - **Pas de réverbération** : un couloir sonne comme l'extérieur.
 - **WAV uniquement**, pas d'Ogg ni de MP3.
 - **Pas de texture de particule** : le disque est calculé dans le nuanceur.
-- **26 avertissements** dans le projet de **tests** (analyseurs NUnit). Antérieurs, sans effet.
-  `src/` est bien à **zéro**.
+- **30 avertissements** dans le projet de **tests** (analyseurs NUnit). Recomptés le 08/10 et
+  attribués par `git blame` : 26 du 16/08, 4 du 17/08 — aucun plus récent. `src/` est bien à
+  **zéro**. ⚠️ Un nouveau test n'en ajoute AUCUN : `TestContext.Out.WriteLine`, pas
+  `TestContext.WriteLine` (NUnit1033), et `Assert.That(…, Is.Empty)` plutôt que `CollectionAssert`.
 
 ## 6. Quatre pièges qui m'ont eu DANS CETTE SESSION
 
 1. **`--no-build`.** J'ai passé six étapes à diagnostiquer une fumée « toujours blanche » que
    j'avais déjà corrigée : le binaire était périmé. **Ne jamais l'utiliser**, même derrière un
-   `dotnet build` réussi dans la même commande.
+   `dotnet build` réussi dans la même commande. ⚠️ `lancer.bat` le faisait lui-même — compilation
+   puis `dotnet run --no-build` — jusqu'au 08/10 ; retiré, et vérifié par un lancement avec capture.
 2. **Un test écrit à mélange 0,5 ne prouve rien sur le slerp** — à mi-chemin, linéaire et
    sphérique donnent le même résultat. Mon test passait avec une implémentation fausse.
 3. **Une mesure contaminée.** Mon atténuation audio donnait 16,9× au lieu de 4× : la source
@@ -177,7 +247,7 @@ caisses, soit elles doivent naître relativement au `spawn`.
 
 ---
 
-⚠️ Le projet **de tests**, lui, sort 26 avertissements (analyseurs NUnit qui suggèrent
+⚠️ Le projet **de tests**, lui, sort 30 avertissements (analyseurs NUnit qui suggèrent
 `Assert.That` au lieu de `ClassicAssert`). Ils sont antérieurs et sans effet sur le moteur.
 
 **Acquis** : boucle à pas fixe déterministe · collision AABB + déplacement Quake ·
@@ -283,6 +353,356 @@ le bruit de fond. Combiné à l'aller-retour octet pour octet, ça suffit. **La 
 non-reproductibilité n'est pas identifiée, et c'est une dette à part entière** : elle prive le
 projet de son outil de non-régression visuelle.
 
+✅ **CORRECTION DU 07/10 — LES CAPTURES SONT REPRODUCTIBLES, à deux conditions.** Mesuré avec
+`tools/ab-captures.ps1`, la même build contre elle-même : **6 scènes sur 8 identiques au bit
+près** (même SHA-256), et 7 sur 8 dès que l'animation est figée dans l'éditeur aussi. Les deux
+conditions :
+
+1. **`character_speed 0`** partout où un personnage est visible. L'horloge d'animation vaut
+   `_simTime + alpha × pas`, et `alpha` dépend de l'instant réel de la capture.
+2. **Pas de particules.** Elles sont interpolées par le même `alpha` : sur 31 captures de la scène
+   « effets », **31 empreintes différentes**, référence comprise (écart de 0 à 33 pixels).
+
+La scène « partie » est **bimodale** : elle a deux images possibles, toujours les deux mêmes
+(empreintes `6FE43478` et `484E56F6`), sans doute selon le pas où une caisse s'endort. Un écart de
+13 pixels sur elle n'est donc pas une régression tant que l'image produite est l'une des deux.
+La mesure des 96,7 % du 17/08 n'a pas été reproduite ; sa cause reste inconnue (seuil 0 sur une
+scène animée ? autre machine ?), mais l'outil de non-régression visuelle EXISTE à nouveau.
+
+## Calcul de chemin (08/10) — E16, la plus grosse absence de l'IA, comblée
+
+**Avant** : un PNJ marchait en ligne droite et restait collé à tout obstacle de plus de 45 cm.
+**Maintenant** : `NavGrid` (`Core/Navigation/`) découpe le décor en colonnes de 25 cm, garde
+chaque dessus de boîte où le **vrai corps** du PNJ tient, relie les sols voisins (montée ≤ 45 cm,
+chute ≤ 2 m), et un A* trouve le chemin. Grille **2,5D** : plusieurs étages par colonne, donc
+estrades, escaliers, passerelles et passages dessous.
+
+📸 **Preuve** : `maps/chemins.map`, écrite à la main — une ronde entre un point derrière un mur de
+20 m et un point sur une estrade de 1,80 m à escalier. À 11 s, le garde a atteint l'estrade (HUD :
+altitude **1,8**, `ONREACHGOAL`) et repart. **Même carte avec `nav_enabled 0`** : collé au mur en
+(0 ; 0,7), **0,0 m/s** — exactement le défaut du 17/08.
+
+Console : `nav` (grille, composantes, recherches, chemin de chaque PNJ), `nav_enabled 0|1`,
+`nav_show 1` (le chemin en lattes : **bleu** vers la cible, **orange** au plus près). Le HUD
+affiche désormais l'**altitude** de chaque PNJ, et `CHEMIN i/n` ou `INACCESSIBLE`.
+
+📏 **A/B contre 6ce870a** (`tools/ab-captures.ps1`) : 7 scénarios sur 8 identiques au seuil 6 ;
+`pnj` ne diffère que sur la ligne de HUD du garde (zone x 244-470, y 84-103 : l'altitude
+insérée, position et état inchangés). Console : 3 entrées de plus, session de 70 commandes
+identique. Le garde de `formes.map` marche en ligne droite — le calcul de chemin ne s'y
+déclenche pas, et c'est ce qui rend la comparaison possible.
+
+⚠️⚠️ **LE DÉFAUT DE MA PREMIÈRE VERSION, ET IL AURAIT RENDU LE JEU INJOUABLE.** Une cible
+inaccessible (joueur sur une estrade sans escalier) laissait la liste du chemin vide — et « pas de
+chemin » déclenchait un recalcul. Donc un A* **à chaque pas**. Mesuré : un A* qui échoue visite
+tout ce qui est accessible, **18 ms** sur 60 × 60 m, soit plus d'une image à 64 pas/s pour **un
+seul** garde. Les 5 premiers tests étaient verts ; c'est la **durée** d'un test (2 s au lieu de
+quelques ms) qui a mis la puce à l'oreille, la relecture du code l'a confirmé. Désormais figé : le
+nombre de recherches en 6 s est borné (12 mesurées, 384 avec le défaut).
+
+⚠️⚠️ **D'OÙ LES COMPOSANTES FORTEMENT CONNEXES.** Le graphe est **orienté** : on descend d'une
+estrade sans marches, on n'y monte pas. Tarjan, écrit **sans récursion** (une composante de 57 000
+sols ferait une pile de 57 000 appels), puis la table « qui atteint qui », en bits. « Cette cible
+est-elle accessible ? » devient une lecture de bit. Une cible inaccessible ne lance plus qu'une
+recherche **bornée** (4 096 sols) qui rend le chemin vers le point **le plus proche** : le garde
+vient au pied de l'estrade et attend, tourné vers le joueur, au lieu de pousser contre la paroi.
+
+📏 **Coûts en régime établi** (200 itérations de chauffe — les durées affichées par les tests
+incluent la compilation à la volée et sont 5 à 9 fois trop pessimistes) :
+
+| Opération | Coût |
+|---|---|
+| Approche d'une cible inaccessible (était 18 ms) | **0,89 ms** |
+| Détour de 70 m | 0,92 ms |
+| Diagonale de 80 m entre 40 boîtes | 1,08 ms |
+| Construction, 60 × 60 m + 40 boîtes (une fois par carte) | 21 ms |
+| Terrain dégagé, trajet de 36 × 18 m | **144 sols visités** sur 25 568 |
+
+⚠️ **L'heuristique OCTILE et le départage par g ne sont pas du confort.** Sur un trajet en biais,
+des milliers de cases ont exactement le même coût estimé. Vérifié par mutation : sans départage,
+ou avec la distance à vol d'oiseau, `En_Terrain_Degage_L_A_Etoile_Ne_Fouille_Pas_Tout` tombe.
+
+⚠️ **Le corps est testé à partir d'une HAUTEUR DE MARCHE**, pas depuis le sol. Première version :
+devant chaque contremarche, le bas du corps chevauchait la marche suivante, et un escalier devenait
+une suite d'îlots. Aucun chemin ne montait.
+
+⚠️ **Une chute est une arête de PLUSIEURS cases.** Au pied d'un mur, sur un demi-corps de large, le
+sol n'est pas marchable (le corps toucherait la paroi) : le dessus d'une estrade n'avait aucun
+voisin au sol. Un vrai PNJ qui sort d'un bord atterrit à un demi-corps du mur : c'est cette arête.
+
+⚠️ **La ligne droite doit ARRIVER au niveau de la cible.** Sans ce test, un joueur sur une
+passerelle est « en ligne droite » de tout le sol qui passe dessous : le PNJ marcherait jusque
+sous ses pieds. Et l'**arrivée** regarde désormais la hauteur (`ArriveHeight`, 1,5 m) : un point
+de ronde sur une passerelle était « atteint » dès que le garde passait dessous. Ces règles ne
+s'appliquent que navigation active : **`nav_enabled 0` reste le comportement d'avant E16 à
+l'identique** — c'est ce qui en fait une contre-épreuve.
+
+⚠️ **La ligne droite d'abord, le chemin seulement si quelque chose barre la route.** Une fois sur
+un chemin, la ligne droite n'est re-testée qu'aux recalculs (0,5 s) : au ras d'un coin, elle
+s'ouvre et se ferme d'un pas à l'autre, et chaque fermeture relancerait un A*.
+
+⚠️ **Repérer le joueur REMET le chemin à zéro.** Sans ça, un garde en plein contournement suivait
+encore jusqu'à 0,5 s le chemin de sa ronde, dos au joueur qu'il venait de voir.
+
+📏 **9 mutations, toutes attrapées** :
+
+| Mutation | Tests qui tombent |
+|---|---|
+| la table dit « tout est accessible » | 2 |
+| la ligne droite sans test d'arrivée | 2 |
+| pas de départage | 1 |
+| heuristique à vol d'oiseau | 1 |
+| pas de chemin partiel (on reste au départ) | 3 |
+| pas de fermeture transitive | 2 |
+| recalcul à chaque pas | 1 |
+| arrivée sans la hauteur | 1 |
+| pas de remise à zéro en repérant le joueur | 1 |
+
+⚠️ **`AgentNavigationTests` met un VRAI `CharacterMotor` sur le chemin**, chaque test avec sa
+contre-épreuve `nav_enabled 0`. C'est la leçon de l'ascenseur (E17) : 27 tests verts sur
+`MoverWorld`, et un joueur qui ne montait pas.
+
+### Ce qui reste — à ne pas prendre pour des bugs
+
+- **La grille ne voit que le DÉCOR.** Portes, caisses et autres PNJ n'y sont pas : un garde
+  planifie à travers une porte fermée et **attend devant en poussant** jusqu'à ce qu'elle s'ouvre.
+  ✅ Depuis le 08/10 il BUTE bien sur elle (voir plus bas) ; avant, il la traversait.
+- **La grille est CONSERVATRICE** : un couloir juste aussi large que le corps peut être jugé
+  infranchissable selon l'alignement des cases de 25 cm.
+- **Les formes ne comptent pas** : la grille lit les AABB, comme la collision. Une rampe ne se monte
+  pas — c'était déjà vrai pour le joueur.
+- **Pas de saut** : un trou se contourne, ou ne se franchit pas.
+- **Grille construite au chargement de la carte**, jamais mise à jour en cours de partie.
+- **Aucun ressenti jugé** : un garde qui contourne « bien » ou « bizarrement », ça se regarde.
+
+## Une porte qui se referme sur quelqu'un (08/10) — elle repart, comme dans Source
+
+**Avant** : une porte avançait sans regarder. Refermée sur le joueur, elle le **chevauchait**, et
+c'était au `CharacterMotor` de l'en sortir — le README le notait : *« elle le repousse, pas de
+notion de blocage »*. **Maintenant** : `Mover.Step` reçoit les obstacles du pas (joueur, PNJ,
+caisses) et, si la course en touche un, applique la propriété **`blocked`** :
+
+| `blocked` | Effet |
+|---|---|
+| `reverse` (défaut) | repart dans l'autre sens — la porte de Source |
+| `stop` | attend sur place que la voie se libère |
+| `push` | passe quand même — le comportement d'avant |
+
+Sortie **`OnBloque`** (`target_blocked` / `input_blocked`), émise **une fois par blocage**.
+
+📏 **Vérifié en jeu**, `logique.map`, joueur dans l'embrasure, porte ouverte puis refermée seule
+(`wait=3`) : **`reverse` → à 6 s `Ouverture 67 %`, à 8,5 s `Ouvert 100 %`** — jamais fermée ;
+**`push` → `Fermeture 34,9 %` puis `Ferme 0 %`**, refermée sur le joueur. Capture : `PORTE
+OUVERTURE 79 %` vue depuis l'embrasure.
+
+🐛⚠️ **TROUVÉ EN JEU, PAS EN TEST : une porte doit pouvoir S'ÉLOIGNER de ce qu'elle chevauche
+déjà.** Premier essai : `tp 0 0 0` met le joueur DANS la porte fermée ; à l'ouverture, la position
+suivante le chevauchait encore, la porte se jugeait bloquée, repartait, se rebloquait — et oscillait
+sur place, **0 %** à 6 s comme à 8,5 s. Seul ce que la course touche NOUVELLEMENT l'arrête
+désormais. Les 5 premiers tests passaient avec le défaut ; le 6ᵉ le fige.
+
+⚠️ **Un PASSAGER n'est pas un obstacle** : sinon tout ascenseur se figerait dès qu'on monte dessus.
+⚠️ **Une sortie par blocage, pas une par pas** : en mode `stop`, une porte qui attend émettrait
+sinon `OnBloque` 64 fois par seconde.
+
+📏 **5 mutations, toutes attrapées** : passager compté comme obstacle, `OnBloque` à chaque pas,
+blocage sans retour, rien ne bloque (3 tests), chevauchement existant compté. 6 tests. **A/B
+contre 2f777a4 : identique**, console comprise (`effets` à 2 pixels, dans la variation connue).
+
+## Ambiance et PNJ comme CIBLES (08/10) — allumer une lumière, jouer un son, réveiller un garde
+
+Le README le disait en une ligne : *« rien encore qui allume une lumière, joue un son, ou réveille
+un PNJ »*. Trois récepteurs de plus pour le câblage sorties → entrées :
+
+| Type / cible | Entrées | Propriétés |
+|---|---|---|
+| `env_light` | Allumer, Eteindre, Basculer | color (`r,g,b` linéaire, **virgules**), intensity, range, start_off |
+| `env_sound` | Jouer, Arreter, Basculer | hz, volume, start_on |
+| `npc_dummy` **nommé** | Patrouiller, Arreter, Rentrer | — |
+
+Console : **`env`**. `EnvWorld` (Core) ne porte que l'ÉTAT ; le rendu d'une lampe et la voix d'un
+son vivent dans le jeu, qui lit cet état — exactement comme une porte.
+
+📏 **Trois preuves, une par sens** (`maps/logique.map` étendue) :
+- 📸 **lampe** : allumée contre éteinte (`ent_send lampe Eteindre`), **142 097 pixels changés**
+  (15,4 %), l'éclairage rouge sur le mur disparaît ;
+- 🔊 **sirène** : enregistrement WAV avec et sans `ent_send sirene Jouer` — **RMS 0,0140 / 0,0094
+  contre 0,0005 / 0,0009** (gauche/droite : la sirène est à gauche du joueur, ça s'entend dans
+  les chiffres). Hauteur mesurée par passages à zéro : **440,0 Hz** sur 6 bips sur 7 (le
+  septième est le bruit d'un son d'événement). Et la cohérence : un bip à 50 % du temps, de crête
+  0,029, doit donner un RMS de 0,0145 — mesuré 0,0140 ;
+- 📸 **veilleur** : endormi (`IDLE`, immobile) à 1 s, en ronde (`PATROL`) à 5 s — réveillé par la
+  herse qui s'ouvre (`target_open=veilleur input_open=Patrouiller`).
+
+⚠️ **La version de l'ambiance ne bouge qu'au CHANGEMENT.** C'est elle qui fait reconstruire
+l'éclairage : un « Allumer » reçu à chaque passage sur une lampe déjà allumée le reconstruirait
+64 fois par seconde. Et sans elle, l'interrupteur marchait dans Core et la lampe ne s'allumait
+qu'au chargement de carte suivant. Vérifié par mutation.
+
+⚠️ **Un son en boucle est un BIP, pas une note tenue** : `SoundGen.Beep`, 0,25 s de son puis
+0,25 s de silence. `Tone` bouclé « respirerait » au rythme de la boucle — son enveloppe
+anti-claquement le ramène à zéro à chaque tour. Les deux bouts du bip valent zéro : la boucle se
+raccorde sans discontinuité (testé).
+
+⚠️ **Les sons d'ambiance se synchronisent dans TOUS les modes, console ouverte comprise**, et la
+lampe se relit à chaque image : c'est par la console qu'on les actionne en headless.
+
+⚠️ **« Patrouiller » sans ronde laisse le PNJ au repos** — en Patrol sans point à viser, il
+resterait immobile dans un état que le HUD afficherait comme une ronde en cours.
+
+⚠️ **Les lampes commutables passent APRÈS celles de la carte** : au-delà de 32 lumières, ce sont
+elles qui sautent, pas l'éclairage que la carte déclare.
+
+📏 **4 mutations, toutes attrapées** : version qui bouge sans changement, couleur négative
+acceptée, « Patrouiller » sans ronde, PNJ non inscrits. Les fils de câblage de l'éditeur
+connaissent les nouvelles cibles, dans l'ordre d'inscription du jeu. **A/B contre dc136a2 : les
+huit scénarios identiques** ; console : `env` en plus, et la liste des types.
+
+## Les PNJ et les portes (08/10) — un garde traversait une porte fermée, et voyait au travers
+
+🐛 **Les PNJ ne connaissaient que le DÉCOR** : leur `CharacterMotor` et leur ligne de vue
+recevaient `Level`, construit une fois au chargement. Portes et caisses leur étaient
+transparentes : un garde traversait une herse fermée, et repérait le joueur derrière. Le joueur,
+lui, bute sur `Walkable` — décor, caisses, portes, reconstruit à chaque pas par `PrepareStep`.
+`AgentWorld.Update` reçoit désormais ce même monde (`solid`), pour le déplacement ET la vue.
+
+📸 **A/B sur deux binaires**, `maps/logique.map` (un garde dont la ronde passe sous la herse),
+minuterie arrêtée donc herse fermée, capture à 4 s : **référence 80d388f : garde en z = −3,9,
+passé AU TRAVERS** ; **après : z = 0,6, 0,0 m/s, arrêté devant**. 4 tests (dont une contre-épreuve
+sans monde solide), 2 mutations attrapées (déplacement, vue). A/B des huit scénarios contre
+80d388f : identiques, console comprise (`effets` à 1 pixel, dans le bruit).
+
+⚠️ **Le calcul de chemin reste sur le décor**, volontairement : une porte s'ouvre et se ferme, la
+grille ne se reconstruit pas à chaque fois. Conséquence assumée : devant une porte fermée, le
+garde **pousse** (vitesse voulue non nulle) jusqu'à ce qu'elle s'ouvre, au lieu de chercher un
+autre chemin.
+
+⚠️ **Les PNJ ne se voient toujours pas entre eux et ne se bousculent pas** : ils ne sont pas dans
+`Walkable`.
+
+## Entités LOGIQUES (08/10) — relais, minuterie, compteur, et le câblage enfin visible
+
+**Avant** : une seule entité AGISSAIT, `func_door`. Le câblage sorties → entrées marchait, mais
+rien ne pouvait se poser ENTRE un déclencheur et une porte. `LogicWorld` (Core) ajoute :
+
+| Type | Entrées | Sortie | Propriétés |
+|---|---|---|---|
+| `logic_relay` | Declencher, Activer, Desactiver, Basculer, Annuler | `OnDeclenche` | delay, once, start_disabled |
+| `logic_timer` | Demarrer, Arreter, Basculer, Declencher | `OnMinuterie` | interval, start_disabled |
+| `logic_counter` | Ajouter, Retirer, Remettre | `OnMax` | max, start |
+
+Toutes ont `name`, `target`, `input`. Entrées en **français sans accent**, comme celles des
+portes : c'est la langue des récepteurs du moteur. Console : **`logic`** (état, câblage, file,
+refus). Éditeur : **F10** relais, **F11** minuterie, **F12** compteur — ⚠️ **non vérifiées au
+clavier** (F10 est la touche de menu de Windows, F12 celle du débogueur) ; la voie vérifiée est
+`ed_entity logic_relay`.
+
+📸 **Preuve** : `maps/logique.map`, écrite à la main. Deux `ent_send compteur Ajouter` à t = 0 →
+le compteur atteint 2/2 → le relais attend 1 s → la porte s'ouvre : **`PORTE OUVERT 100 %`** sur
+la capture à 3,2 s, et la minuterie a basculé la herse à 2,00 s. **Contre-épreuve, un seul
+passage : `PORTE FERME 0 %`**, la herse s'ouvre quand même.
+
+⚠️⚠️ **UNE BOUCLE NE PEUT PAS GELER LE JEU.** Deux relais qui se visent sans délai
+s'appelleraient à l'infini dans le même pas. Toute sortie logique passe par une FILE ; `Step` en
+sort tout ce qui est dû AVANT de livrer, donc une sortie demandée pendant la livraison part au pas
+suivant. Une boucle devient un **battement à 64 Hz**, visible dans le fil d'événements. Testé :
+100 pas → 100 événements, une seule sortie en attente.
+
+⚠️ **HONNÊTETÉ : la règle « au moins un pas » à la mise en file est une deuxième ceinture.**
+Vérifié par mutation : sans elle, les 13 tests passent, boucle comprise — c'est la sortie de file
+avant livraison qui protège. On garde les deux ; retirer les deux gèlerait le jeu, et ce test-là
+ne s'écrit pas : il ne rendrait jamais la main.
+
+⚠️ **La file est BORNÉE (256) et le refus est COMPTÉ** (`logic` l'affiche). Une sortie ne vise
+qu'une cible, donc rien ne se multiplie seul — mais une minuterie rapide qui nourrit un relais
+lent remplirait la file sans fin. Même règle que le réservoir de particules : un débordement
+silencieux fait « arrêter de marcher » un niveau sans raison visible.
+
+⚠️ **LA MINUTERIE NE DÉRIVE PAS** : l'échéance suivante se calcule depuis la PRÉCÉDENTE, pas
+depuis « maintenant ». Vérifié par mutation : recalée sur maintenant, 0,3 s donne ~96 sorties en
+30 s au lieu de 100. Et le test m'a eu au passage : écrit à 30 s pile, il comptait **99** — ce
+n'était pas une dérive, c'était 0,3 en `float` (0,30000001), dont la centième échéance tombe à
+30,0000012 s, un pas trop tard.
+
+⚠️ **Redémarrer une minuterie qui tourne ne repousse PAS son échéance** — sinon un déclencheur
+qui renvoie « Demarrer » à chaque passage la ferait taire indéfiniment. **Un compteur n'émet
+qu'en ATTEIGNANT son maximum**, pas à chaque ajout au-delà : sinon trois passages de trop
+rouvriraient trois fois une porte ouverte. **Un relais désactivé ENTEND l'entrée** (livrée) mais
+ne relaie pas : répondre « entrée inconnue » ferait chercher une faute de frappe inexistante.
+
+⚠️ **La logique avance dans `PrepareStep`, pas dans `UpdateEntities`** — pour la même raison que
+les portes : ce pas-là tourne aussi console ouverte et derrière le menu. Une minuterie qui
+s'arrêterait dès qu'on tape `ent_send` serait invérifiable en headless.
+
+📏 **6 mutations** : dérive de la minuterie, compteur qui émet à chaque ajout, file sans borne,
+« Demarrer » qui repousse l'échéance → chacune attrapée par son test ; plus la deuxième ceinture
+ci-dessus, **non attrapée, et c'est écrit**. `EntitySchemaTests` couvre les trois nouveaux
+catalogues (3 mutations de défaut affiché, toutes attrapées).
+
+### Les FILS du câblage, dessinés dans l'éditeur
+
+Une latte **jaune** de chaque entité vers la cible qu'elle vise (`target`, `target_open`,
+`target_close`), une bille au bout qui reçoit. Une latte **rouge** dressée au-dessus d'une entité
+dit « je vise un nom que personne ne porte » — `porte_hal` au lieu de `porte_hall`, la faute de
+carte la plus courante, qui ne se voyait jusqu'ici qu'EN JOUANT (`CibleAbsente`). La cible est
+résolue comme le moteur la résout : seules les entités qui REÇOIVENT (portes, puis logique, dans
+l'ordre d'inscription), la première qui porte le nom gagne. 📸 Vérifié par capture : les quatre
+fils de `logique.map`.
+
+🐛 **Au passage, un défaut d'affichage antérieur** : la fin des deux premières lignes d'aide de
+l'éditeur (`TAB PANNEAU`, `CTRL+Z/Y`, `CTRL+S`, `P DEPART`) passait SOUS le panneau de
+propriétés, qui couvre toute la hauteur à droite. Constaté sur une capture ; l'aide tient
+maintenant en cinq lignes de 90 caractères au plus (10,2 px par caractère à l'échelle 1,7).
+
+📏 **A/B contre a7440ab** : `editeur` change comme prévu (aide réorganisée, fil du volume vers la
+porte de `formes.map`) ; console : `logic` en plus, et la liste des types d'`ed_entity`. Six
+scénarios identiques. ⚠️ **`effets` varie de 0 à 7 pixels d'un lancement à l'autre** (deux
+reprises : 0 puis 6 ; bruit mesuré sur la référence seule : 0 et 1). L'écart n'est pas
+systématique — une reprise redonne l'image exacte — mais je n'ai pas isolé pourquoi il dépasse
+parfois le bruit mesuré : les particules sont interpolées à l'affichage, c'est la piste.
+
+## Câblage des PNJ et catalogue des propriétés (08/10) — trois défauts, un test qui les voit
+
+🐛 **Les sorties des PNJ n'étaient livrées à PERSONNE.** `OnSpotPlayer -> porte.Ouvrir`
+s'affichait dans le fil d'événements, et la porte ne bougeait pas : `GameWorld` rapportait les
+événements des PNJ sans jamais appeler `Send`. Volumes et portes livraient ; les PNJ étaient le
+seul émetteur oublié. `AgentWorld.Update` reçoit désormais le monde des entités. Un test
+d'intégration met un vrai garde et une vraie porte, et vérifie qu'elle s'ouvre — avec sa
+contre-épreuve sans routeur, qui reproduit l'ancien comportement.
+
+🐛 **Le panneau de propriétés affichait CINQ défauts faux, et en omettait trois** :
+
+| Propriété | Affiché | Lu par le moteur |
+|---|---|---|
+| `size` (et `height`) des volumes | 4 | **3** |
+| `depth` des portes | 0,2 | **0,3** |
+| `input_spot` / `input_lose` des PNJ | Trigger / Untrigger | **Alert / Calm** |
+| `input_goal` (PNJ), `input_open` / `input_close` (portes) | absentes | Reached / Trigger |
+
+C'était exactement le risque nommé en tête de `EntitySchema` — « un défaut affiché faux se lit
+comme l'état du moteur » — et rien ne le vérifiait. **`EntitySchemaTests`** compare maintenant,
+pour chaque type, une entité SANS propriété et la même avec TOUS les défauts du catalogue écrits
+en clair : elles doivent se comporter à l'identique. Aucune valeur n'est recopiée dans le test,
+il confronte le moteur à lui-même. ⚠️ **Ce qu'il ne voit pas** : une clé lue par le code et
+OUBLIÉE du catalogue — absente des deux côtés, elle ne change rien.
+
+🐛 **Ce test a trouvé un vrai défaut du moteur au passage.** Un checkpoint sans `name` ni `order`,
+franchi deux fois, comptait **double** : son nom de repli était le nombre de checkpoints déjà
+franchis, donc « 0 » puis « 1 ». Contraire à la règle « un checkpoint ne s'enregistre qu'une
+fois », que le test existant ne vérifiait qu'avec un checkpoint NOMMÉ. Le nom de repli est
+désormais le rang de l'entité dans la carte (`#n`), stable d'un passage à l'autre.
+
+✅ **La livraison des fins de course des portes est descendue dans `Core`**
+(`MoverWorld.DeliverOutputs`) : elle vivait dans `GameWorld`, donc ne se testait pas en ligne de
+commande — et le défaut affiché pour `input_open` ne pouvait être confronté à rien.
+
+📏 **5 mutations, toutes attrapées** : chacune des trois anciennes valeurs du catalogue, l'ancien
+nom de repli, la livraison retirée.
+
+📏 **A/B contre 44470ed** : seul le panneau de l'éditeur change (garde sélectionné : `ALERT` /
+`CALM` au lieu de `TRIGGER` / `UNTRIGGER`, plus la ligne `INPUT GOAL`). Six scénarios identiques,
+`effets` à 2 pixels au seuil (bruit des particules, max 9/765), console identique.
+
 ## PNJ (17/08) — E14, une IA pilotée par des PROPRIÉTÉS
 
 **L'intention : que l'auteur du niveau n'écrive pas une ligne de code.** Tout se déclare dans
@@ -333,10 +753,9 @@ que la capture soit **vérifiable** : garde_1 parcourt **8,7 m en 4 s à 2,2 m/s
 garde_2 12,2 m à 3,4 m/s. Chaque PNJ a bien ses propres réglages. Poursuite vérifiée :
 `npc_dummy.OnSpotPlayer -> alarme.Declencher`, garde en `CHASE`, teinté de rouge à l'écran.
 
-⚠️⚠️ **IL N'Y A AUCUN CALCUL DE CHEMIN.** Un PNJ marche en LIGNE DROITE vers sa cible et **reste
-bloqué** contre tout obstacle plus haut que 45 cm. Constaté pendant la vérification : un garde
-lancé en poursuite s'est arrêté net contre une estrade de 1,80 m, à 0,0 m/s. Ce n'est pas un bug,
-c'est une fonctionnalité absente — et c'est la plus grosse.
+✅ ~~**IL N'Y A AUCUN CALCUL DE CHEMIN.**~~ **Fait le 08/10 — voir E16 juste au-dessus.** Le
+constat du 17/08 : un garde lancé en poursuite s'arrêtait net contre une estrade de 1,80 m, à
+0,0 m/s. Avec un escalier, il monte désormais ; sans, il vient au pied et attend.
 
 ⚠️ **Les PNJ ne se voient pas entre eux** et ne collisionnent pas entre eux.
 
@@ -462,7 +881,7 @@ traverser une porte fine pendant son mouvement.
 ⚠️ **Les portes bougent aussi console ouverte**, volontairement : la console est le seul moyen
 d'en actionner une en headless, les `--exec` partant tous à t=0.
 
-⚠️ **Le mannequin décoratif et les 4 caisses du bac à sable gênent toute carte chargée.**
+✅ **[Corrigé le 07/10 : `prop_crate` et `prop_mannequin`.]** ⚠️ **Le mannequin décoratif et les 4 caisses du bac à sable gênent toute carte chargée.**
 Pour les captures ci-dessus il a fallu `character_z -55` et `crates clear`. C'est la même dette
 que la note « les 4 caisses ne font pas partie de la carte » — elle empire à mesure qu'on
 charge de vraies cartes, et elle n'est **toujours pas traitée**.
@@ -1483,16 +1902,115 @@ une cible imaginaire.
 ### Ce que je n'ai toujours PAS vérifié
 
 - **Rien n'a tourné entre deux vraies MACHINES.** Loopback et réseau simulé uniquement.
-- **Le client ne charge pas la carte du serveur.** Il prédit dans **sa** carte ; si le serveur
-  en fait tourner une autre, la prédiction est fausse. `net` affiche le nom de la carte serveur
-  pour qu'on s'en aperçoive, mais rien ne l'empêche.
-- **`Fire`/`HitReport` ne sont pas branchés dans le jeu.** `LagCompensation` est écrite et
-  testée dans `Core`, mais le tir du bac à sable reste **local** — il ne passe pas par le
-  serveur. C'est le dernier fil à tirer.
+- ✅ ~~**Le client ne charge pas la carte du serveur.**~~ **Fait le 08/10** — voir « Le client joue
+  sur la carte du serveur » plus bas.
+- ✅ ~~**`Fire`/`HitReport` ne sont pas branchés dans le jeu.**~~ **Fait le 08/10** — voir « Le
+  serveur arbitre le tir » plus bas.
 - **Pas de delta-compression, pas de jeton de session.**
 - **Le ressenti n'est pas jugé.** Il faut jouer à deux, avec du vrai ping.
 
 ---
+
+### Le serveur arbitre le tir (08/10) — le dernier fil de la phase 3
+
+**Avant** : `LagCompensation` était écrite et testée, mais **personne ne l'appelait** — le tir du
+bac à sable restait local. **Maintenant** : chaque tir en ligne (souris, ou `net_fire`) part au
+serveur avec l'**instant que le joueur voyait** (`NetClient.ViewTick`, le pas serveur fractionnaire
+de l'interpolation). Le serveur tient un historique par joueur, rembobine les autres, tranche, et
+renvoie un `HitReport` au tireur (protocole **version 3**). Les effets locaux (étincelles, son)
+restent immédiats : seul le VERDICT vient du serveur.
+
+📏 **Deux vrais processus** (`formes`, cible arrêtée à 6,7 m dans l'axe) : *« tir 1 : TOUCHE
+joueur 2 a 6,3 m »* — 6,7 m moins la demi-largeur de 0,4 m, **au centimètre** — puis, après un
+quart de tour, *« tir 2 : rate »*. Côté serveur : `tirs 2  touches 1  rembobinage decisif 0  refuses
+0`. Capture du tireur : le verdict au HUD, la cible sous le réticule.
+
+📏 **En réseau simulé, 60 ms de latence, cible qui court en travers** : le tireur vise LÀ OÙ IL LA
+VOIT → **touché, et `RewindMattered`** — sans rembobinage, ce tir ratait. **Contre-épreuve** : viser
+là où la cible EST vraiment sur le serveur → **raté**. Le serveur juge ce que le tireur voyait.
+
+⚠️⚠️ **L'INSTANT VU, PAS LE DERNIER PAS REÇU.** Le joueur voit les autres AVEC le retard
+d'interpolation. Vérifié par mutation : en envoyant le dernier pas reçu, **seule la contre-épreuve
+tombe** — le test principal passe encore, l'écart (31 ms, 15 cm) restant sous la demi-largeur d'un
+corps. C'est ce qui justifie d'avoir les deux tests.
+
+⚠️ **Tout ce qui vient du réseau est hostile** : un tir annoncé à plus de **1,5 m** de l'œil du
+tireur côté serveur est **REFUSÉ**, et dit comme tel (`Rejected`) — un client honnête qui tomberait
+là a un problème de prédiction qu'il faut voir, pas un tir raté. 1,5 m couvre l'écart honnête
+(la prédiction devance le serveur d'un aller-retour). L'origine envoyée est donc l'œil PRÉDIT.
+
+⚠️ **Jamais le futur** : un instant vu postérieur au pas courant du serveur est ramené au présent.
+
+📏 **3 mutations attrapées** : jugement au présent (2 tests), dernier pas reçu au lieu de l'instant
+vu (la contre-épreuve), origine non contrôlée. 3 tests réseau. **A/B contre 0f6847d : les huit
+scénarios identiques** ; console : `net_fire` en plus.
+
+⚠️ **Ce qui reste** : un tir n'a **aucun effet** — pas de points de vie, pas de mort. C'est du
+contenu de jeu, hors périmètre (phase 5 supprimée). Le verdict est affiché, compté, et c'est tout.
+
+### `delay` — tirer APRÈS la connexion, en headless
+
+Tous les `--exec` partent à t = 0 : impossible de tirer après une connexion, d'ouvrir une porte à
+mi-course, de basculer un réglage au milieu d'une mesure. **`delay <secondes> <commande>`**
+(`ConsoleSystem`, Core — donc disponible pour tout jeu) exécute la commande plus tard, en temps de
+**simulation** (une fenêtre masquée tourne au ralenti). Sa sortie est recopiée sur la sortie
+standard, préfixée `delai`. Une commande programmée pendant l'exécution attend le pas suivant —
+même règle que la logique. `2,5` est accepté comme `2.5`. 8 tests.
+
+```powershell
+dotnet run --project src\Exarion.Game -c Release -- --exec play --exec "connect 127.0.0.1" --exec "delay 4 net_fire" --exec "delay 5 net"
+```
+
+### Le client joue sur la carte du serveur (08/10)
+
+**Avant** : le serveur annonçait le NOM de sa carte, le client l'affichait — et prédisait dans
+SA carte. Un client sur un autre décor était corrigé en permanence sans que rien ne dise pourquoi.
+
+**Maintenant** : le Welcome porte une **empreinte du décor solide** (`MapFile.Fingerprint`,
+protocole **version 2**), et `MapSync.Decide` (Core, fonction pure) tranche : **garder** la carte
+courante si son décor concorde, **charger** celle du serveur si on l'a, sinon **refuser** — se
+déconnecter en disant pourquoi. `net` affiche l'empreinte et la décision.
+
+📏 **Vérifié sur deux vrais processus, UDP en boucle locale** :
+- serveur sur `arene`, client sur `formes` → *« carte du serveur chargee : arene »*, capture du
+  client sur le décor d'arene ;
+- serveur sur `arene` **avec un mur déplacé en mémoire**, même nom → *« « arene » existe ici mais
+  son decor DIFFERE (empreinte 303785d1 contre e8d80e3c) »*, client déconnecté ;
+- les deux sur le bac à sable intégré → *« identique à la carte courante »*.
+
+⚠️⚠️ **L'EMPREINTE PORTE SUR LE DÉCOR SOLIDE, PAS SUR LE FICHIER.** Ma première version hachait le
+texte enregistré entier. Elle aurait refusé deux joueurs sur le bac à sable INTÉGRÉ dès que leurs
+réglages d'éclairage différaient : ses intensités viennent d'`exarion.cfg`, et les lumières font
+partie du texte. Or le serveur ne simule QUE les boîtes. L'empreinte prend donc le centre et la
+taille de chaque boîte, **en bits flottants** : ni culture, ni saut de ligne du système (`AppendLine`
+écrit « \r\n » sous Windows, « \n » sous macOS — un client Mac aurait été refusé par un serveur
+Windows) ne peuvent s'en mêler.
+
+⚠️ **Le serveur annonce le NOM DE FICHIER, pas le nom écrit dedans.** Constaté en le testant :
+`arene.map` s'appelle « bac a sable » à l'intérieur (enregistrée depuis le bac à sable). Le client
+cherchait alors `bac_a_sable.map` — un autre fichier, ou aucun.
+
+⚠️ **Un nom, plusieurs candidats** : le bac à sable intégré s'appelle « bac a sable », et un
+`bac_a_sable.map` peut traîner dans le dossier. `MapSync` prend celui dont le décor concorde.
+
+⚠️ **La vérification passe ENTRE la réception et la première prédiction.** Placée après l'envoi
+de l'entrée, le premier pas après le Welcome prédisait encore dans l'ancien décor : mesuré
+`PIRE 39,1 CM` au démarrage, **26,0** une fois déplacée. Pour comparaison, **sans aucun changement
+de carte : `PIRE 22,3 CM`** — les corrections du démarrage sont la base existante, pas la synchro
+(une mesure de chaque : à confirmer).
+
+⚠️ **Le monde de prédiction suit la carte.** Il était capturé à la connexion : un `map_load`
+ultérieur laissait le client prédire dans l'ancien `CollisionWorld`. Tout changement de carte
+remet la vérification à faire, et le client se recale — ou se déconnecte.
+
+📏 **4 mutations attrapées** : empreinte sans la taille, « le nom suffit », Welcome sans empreinte,
+nom interne annoncé. 8 tests `MapSyncTests` + 2 `NetTests`. **A/B contre 3047d9f : tout identique**,
+y compris le scénario `reseau` (l'hôte se connecte à lui-même : « garder »).
+
+⚠️ **Ce qui reste** : les **entités** (portes, logique) ne sont pas synchronisées — chaque client
+fait tourner les siennes ; une porte ouverte chez l'un est fermée chez l'autre. Et l'hôte qui
+change de carte (`map_load`) ne fait pas changer celle du SERVEUR : son propre client se
+déconnecte, faute de concorder.
 
 ## Réseau — l'étape précédente (3.1 → 3.4)
 
@@ -1691,13 +2209,32 @@ un chiffre est pire qu'un README absent.
 ## Outils de vérification — À UTILISER SYSTÉMATIQUEMENT
 
 ```powershell
-dotnet test                          # 585 tests, ~2 s
+dotnet test                          # 703 tests, ~5 s
 dotnet build --no-incremental        # doit rester à 0 erreur, 0 avertissement dans src/
 dotnet run --project samples\Exarion.Sample -c Release   # le second client doit tourner
 ```
 
 ⚠️ **Le jeu d'exemple fait partie des outils de vérification.** S'il cesse de compiler, c'est
 que le moteur vient de redevenir dépendant de son bac à sable — et il est le seul à le dire.
+
+📏 **Non-régression complète : `tools\ab-captures.ps1`** (depuis le 07/10). Il compare la copie
+de travail à une copie FIGÉE du dépôt :
+
+```powershell
+git worktree add --detach ..\reference <commit>          # une fois
+pwsh tools\ab-captures.ps1 -Reference ..\reference        # ~4 min
+pwsh tools\ab-captures.ps1 -Reference ..\reference -Bruit # la référence contre ELLE-MÊME
+```
+
+Huit captures (menu, partie, effets, éditeur, PNJ, portes, réseau, jeu d'exemple), l'inventaire
+complet de la console et une session scriptée de 70 commandes. **Mesurer le bruit d'abord**
+(`-Bruit`) : un écart du même ordre ne prouve rien. Pour un changement VOULU, l'outil doit montrer
+exactement ce qui devait changer, et rien d'autre — puis on avance la référence (`git -C
+..\reference checkout --detach HEAD`). `-Seulement partie,editeur` pour cibler.
+
+📏 **Le son se mesure aussi** : `--audio-dump f.wav --audio-seconds N`, puis
+`tools\wav-niveau.ps1 f.wav` donne crête et RMS par canal. C'est ce qui a prouvé que
+l'occlusion ne voyait plus aucun mur.
 
 📏 **Comparaison de deux captures** : `tools\diff-png.ps1 a.png b.png [seuil]`. Il vit dans le
 dépôt parce qu'il a déjà été réécrit deux fois — la première version dormait dans un dossier
@@ -1724,6 +2261,9 @@ dotnet run --project src\Exarion.Game -c Release -- `
 Options : `--seconds N` `--screenshot fichier` **`--shot-at N`** `--exec "commande"` (répétable)
 `--novsync` `--shadows 0|1` `--tickrate N` `--sensitivity N` **`--map nom`**
 
+⚠️ **Pour agir APRÈS t = 0** (tirer après une connexion, ouvrir une porte à mi-course) :
+`--exec "delay 4 net_fire"`. La sortie des commandes différées sort préfixée `delai`.
+
 Variables utiles en console : `perf` (coût du pas physique), `phys_iterations`,
 `phys_velocity_iterations`, `phys_sleep`, `crate_size`, `light_lamps`.
 
@@ -1744,6 +2284,17 @@ Cette boucle a déjà trouvé **deux défauts invisibles autrement** : éclairag
 faible, et ombres invérifiables sous un plafond fermé.
 
 **En cas de plantage** : lire `src\Exarion.Game\bin\Release\net9.0\plantage.txt`.
+
+## Pièges d'outillage du 08/10 — chacun a faussé une mesure au moins une fois
+
+| Piège | Ce qui s'est passé | La parade |
+|---|---|---|
+| `Start-Process -ArgumentList` | recolle les arguments **sans guillemets** : `host 27120` devint deux arguments, le serveur s'ouvrit sur le port par défaut, et le client ne trouva personne | citer chaque argument soi-même (`'"' + $_ + '"'`) |
+| `… \| Select-Object -First N` | arrête la LECTURE, pas le processus : deux jeux ont tourné en parallèle, et la comparaison est partie avant la seconde capture | `\| Out-Null`, puis lire le journal |
+| Remplacement multiligne | certains fichiers du dépôt sont en **CRLF** (`EntitySchema.cs`), d'autres en LF : un motif tapé avec des sauts de ligne ne trouvait rien | vérifier `CRLF` / `LF` avant ; `mutation.ps1` refuse un motif trouvé 0 fois — c'est ce qui l'a révélé |
+| `ab-captures.ps1` code 0 | rendait « rien » sur une image différente (corrigé, voir la refonte) | lire les chiffres, pas seulement le code |
+| Durées des tests | incluent la compilation à la volée : 5 à 9 fois trop pessimistes | 200 itérations de chauffe avant de chronométrer |
+| `effets` en A/B | 0 à 7 pixels selon le lancement, au-dessus du bruit mesuré une fois sur deux | refaire l'A/B avant de conclure ; cause non isolée |
 
 ## Pièges qui ont déjà coûté cher
 

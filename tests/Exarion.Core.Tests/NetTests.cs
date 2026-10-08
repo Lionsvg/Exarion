@@ -347,6 +347,200 @@ namespace Exarion.Tests
             ClassicAssert.AreEqual("plat", pair.Client.ServerMap, "et annoncer sa carte");
         }
 
+        /// <summary>
+        /// Le Welcome porte l'EMPREINTE de la carte, pas seulement son nom :
+        /// c'est ce qui permet au client de refuser une carte du meme nom qui
+        /// differe d'un mur (voir MapSync).
+        /// </summary>
+        [Test]
+        public void Le_Welcome_Porte_L_Empreinte_De_La_Carte()
+        {
+            using var pair = Pair.Create();
+
+            pair.Client.Connect(pair.ServerTransport.Local, "moi");
+            pair.Run(10, default);
+
+            ClassicAssert.AreEqual(MapFile.Fingerprint(FlatMap()), pair.Client.ServerMapFingerprint);
+            ClassicAssert.AreEqual(pair.Server.MapFingerprint, pair.Client.ServerMapFingerprint);
+        }
+
+        /// <summary>
+        /// ⚠️ Le serveur annonce le nom par lequel le client RETROUVERA la carte
+        /// chez lui - le nom de fichier - et pas celui ecrit dedans. Constate :
+        /// « arene.map » s'appelle « bac a sable » a l'interieur.
+        /// </summary>
+        [Test]
+        public void Le_Serveur_Annonce_Le_Nom_Donne_Et_Non_Le_Nom_Interne()
+        {
+            using var pair = Pair.Create();
+            pair.Server.LoadMap(FlatMap(), "arene");
+
+            pair.Client.Connect(pair.ServerTransport.Local, "moi");
+            pair.Run(10, default);
+
+            ClassicAssert.AreEqual("arene", pair.Client.ServerMap);
+        }
+
+        // ===================================================================
+        //  3.7 BRANCHE - LE SERVEUR ARBITRE LE TIR (08/10)
+        // ===================================================================
+
+        /// <summary>
+        /// Un tireur immobile, une cible qui court EN TRAVERS de la ligne de
+        /// tir, 60 ms de latence. Renvoie le tout pret a tirer.
+        /// </summary>
+        private static (LoopbackRouter Router, NetServer Server, NetClient Shooter, NetClient Target,
+                        LoopbackTransport[] Transports) Duel(double latency)
+        {
+            var router = new LoopbackRouter(seed: 77) { Latency = latency };
+            var st = new LoopbackTransport(router, "serveur");
+            var at = new LoopbackTransport(router, "tireur");
+            var bt = new LoopbackTransport(router, "cible");
+
+            var server = new NetServer(st);
+            server.LoadMap(FlatMap());
+
+            var shooter = new NetClient(at);
+            var target = new NetClient(bt);
+
+            shooter.Connect(st.Local, "tireur");
+            target.Connect(st.Local, "cible");
+
+            return (router, server, shooter, target, new[] { st, at, bt });
+        }
+
+        private static void Pump(LoopbackRouter router, NetServer server, NetClient shooter, NetClient target,
+                                 ref double time, MoveInput targetInput)
+        {
+            router.Advance(Step);
+            time += Step;
+            server.Step(time, Step);
+            shooter.Poll(time);
+            target.Poll(time);
+            shooter.SendInput(default);
+            target.SendInput(targetInput);
+        }
+
+        /// <summary>L'oeil du tireur, comme le jeu le calcule.</summary>
+        private static Vector3 EyeOf(NetClient client)
+            => client.Predicted.Position + new Vector3(0f, client.Predicted.Height - 0.18f, 0f);
+
+        /// <summary>
+        /// ⚠️ LE test du branchement. Le tireur vise la cible LA OU IL LA VOIT
+        /// - dans le passe, a cause de la latence et de l'interpolation. Le
+        /// serveur rembobine et donne raison au tireur ; et sans rembobinage, ce
+        /// tir aurait rate (RewindMattered).
+        /// </summary>
+        [Test]
+        public void Le_Serveur_Donne_Raison_Au_Tireur_Grace_Au_Rembobinage()
+        {
+            var (router, server, shooter, target, transports) = Duel(latency: 0.06);
+            double time = 0;
+
+            try
+            {
+                // La cible s'eloigne vers le nord, puis court vers l'est : en
+                // travers de la ligne de tir.
+                for (int i = 0; i < 80; i++)
+                    Pump(router, server, shooter, target, ref time, Forward(0f));
+
+                for (int i = 0; i < 40; i++)
+                    Pump(router, server, shooter, target, ref time, Forward(-MathF.PI / 2f));
+
+                ClassicAssert.IsTrue(shooter.TryGetPlayer(target.LocalId, out PlayerState seen), "le tireur doit voir la cible");
+
+                Vector3 eye = EyeOf(shooter);
+                Vector3 aim = seen.Position + new Vector3(0f, 0.9f, 0f) - eye;
+
+                ClassicAssert.Greater(shooter.SendFire(eye, aim), 0u);
+
+                for (int i = 0; i < 30 && shooter.ShotReports == 0; i++)
+                    Pump(router, server, shooter, target, ref time, Forward(-MathF.PI / 2f));
+
+                ClassicAssert.AreEqual(1, shooter.ShotReports, "le verdict doit revenir");
+                ClassicAssert.IsFalse(shooter.LastShot.Rejected);
+                ClassicAssert.AreEqual(target.LocalId, shooter.LastShot.VictimId, "le tireur a vise juste : touche");
+                ClassicAssert.IsTrue(shooter.LastShot.RewindMattered, "sans rembobinage, ce tir ratait");
+                ClassicAssert.AreEqual(1, server.ShotsRewindDecisive);
+            }
+            finally
+            {
+                shooter.Dispose(); target.Dispose(); server.Dispose();
+                foreach (var t in transports) t.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// La contre-epreuve : viser la ou la cible EST VRAIMENT sur le serveur,
+        /// et pas la ou le tireur la voit. Le serveur juge ce que le tireur
+        /// voyait - ce tir-la rate.
+        /// </summary>
+        [Test]
+        public void Viser_La_Ou_La_Cible_Est_Vraiment_Rate()
+        {
+            var (router, server, shooter, target, transports) = Duel(latency: 0.06);
+            double time = 0;
+
+            try
+            {
+                for (int i = 0; i < 80; i++)
+                    Pump(router, server, shooter, target, ref time, Forward(0f));
+
+                for (int i = 0; i < 40; i++)
+                    Pump(router, server, shooter, target, ref time, Forward(-MathF.PI / 2f));
+
+                // La VRAIE position, celle que le serveur connait - on la triche
+                // depuis le client cible lui-meme.
+                Vector3 truth = target.Predicted.Position + new Vector3(0f, 0.9f, 0f);
+                Vector3 eye = EyeOf(shooter);
+
+                shooter.SendFire(eye, truth - eye);
+
+                for (int i = 0; i < 30 && shooter.ShotReports == 0; i++)
+                    Pump(router, server, shooter, target, ref time, Forward(-MathF.PI / 2f));
+
+                ClassicAssert.AreEqual(1, shooter.ShotReports);
+                ClassicAssert.IsFalse(shooter.LastShot.Hit, "le serveur juge ce que le tireur VOYAIT, pas la verite");
+            }
+            finally
+            {
+                shooter.Dispose(); target.Dispose(); server.Dispose();
+                foreach (var t in transports) t.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// ⚠️ Tout ce qui vient du reseau est hostile : un tir annonce depuis
+        /// 10 m a cote du tireur est REFUSE, et dit comme tel.
+        /// </summary>
+        [Test]
+        public void Un_Tir_Parti_De_Trop_Loin_Est_Refuse()
+        {
+            var (router, server, shooter, target, transports) = Duel(latency: 0.0);
+            double time = 0;
+
+            try
+            {
+                for (int i = 0; i < 20; i++)
+                    Pump(router, server, shooter, target, ref time, default);
+
+                Vector3 cheat = EyeOf(shooter) + new Vector3(10f, 0f, 0f);
+                shooter.SendFire(cheat, Vector3.UnitX * -1f);
+
+                for (int i = 0; i < 10 && shooter.ShotReports == 0; i++)
+                    Pump(router, server, shooter, target, ref time, default);
+
+                ClassicAssert.IsTrue(shooter.LastShot.Rejected);
+                ClassicAssert.IsFalse(shooter.LastShot.Hit);
+                ClassicAssert.AreEqual(1, server.ShotsRejected);
+            }
+            finally
+            {
+                shooter.Dispose(); target.Dispose(); server.Dispose();
+                foreach (var t in transports) t.Dispose();
+            }
+        }
+
         [Test]
         public void Une_Mauvaise_Version_Est_REFUSEE_Avec_Une_Raison()
         {

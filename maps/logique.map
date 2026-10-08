@@ -1,0 +1,81 @@
+exarion_map 3
+# Carte de demonstration des ENTITES LOGIQUES (08/10).
+#
+# Deux mecanismes, entierement declares - pas une ligne de code :
+#
+#   1. Le volume devant la porte compte les passages. Au DEUXIEME, le
+#      compteur declenche le relais, qui ouvre la porte une seconde plus
+#      tard. Elle se referme seule apres 3 s.
+#
+#        trigger_volume --Ajouter--> compteur (max 2) --Declencher--> relais (1 s) --Ouvrir--> porte
+#
+#   2. Une minuterie fait basculer la herse toutes les deux secondes.
+#
+#        horloge (2 s) --Basculer--> herse --OnOuvert : Patrouiller--> veilleur
+#
+#   3. La porte ouverte fait sonner une sirene ; une lampe rouge clignote.
+#
+#        porte --OnOuvert : Jouer / OnFerme : Arreter--> sirene
+#        clignotant (0,5 s) --Basculer--> lampe
+#
+# Dans l'editeur, les fils de ce cablage sont dessines en lattes jaunes.
+# En headless : --exec play --exec "ent_send compteur Ajouter" (deux fois).
+#
+# Ecrite A LA MAIN, comme formes.map et chemins.map.
+
+name logique
+
+spawn 3 0 13 0 -6
+
+# --- Sol et mur, troue par la porte (x 0) et la herse (x 6) -------------
+
+box 0 -0.5 0       30 1 30      0.30 0.31 0.34
+
+box -5.25 1.75 0   7.5 3.5 0.4  0.50 0.42 0.36
+box 3 1.75 0       3 3.5 0.4    0.50 0.42 0.36
+box 9.75 1.75 0    4.5 3.5 0.4  0.50 0.42 0.36
+
+# --- 1. Compter les passages ----------------------------------------------
+
+entity trigger_volume   0 1.5 5   0 0   size=3 target=compteur input=Ajouter
+entity logic_counter   -3 0 5     0 0   name=compteur max=2 target=relais input=Declencher
+entity logic_relay     -3 0 2.5   0 0   name=relais delay=1 target=porte input=Ouvrir
+
+# La porte fait sonner la sirene tant qu'elle est OUVERTE : ses deux sorties
+# de fin de course, OnOuvert et OnFerme, visent le meme son.
+entity func_door        0 0 0     0 0   name=porte axis=y distance=3.6 speed=2 width=3 height=3.5 wait=3 target_open=sirene input_open=Jouer target_close=sirene input_close=Arreter
+entity env_sound       -2 2.5 1   0 0   name=sirene hz=440 volume=0.6
+
+# --- 2. Une minuterie et une herse ----------------------------------------
+#
+# La herse, en s'ouvrant, REVEILLE le veilleur (section 4).
+
+entity logic_timer      9 0 2.5   0 0   name=horloge interval=2 target=herse input=Basculer
+entity func_door        6 0 0     0 0   name=herse axis=y distance=3.2 speed=3 width=3 height=3.5 target_open=veilleur input_open=Patrouiller
+
+# --- Une lampe rouge qui clignote -------------------------------------------
+
+entity logic_timer     -4 0 3     0 0   name=clignotant interval=0.5 target=lampe input=Basculer
+entity env_light       -3 3 2     0 0   name=lampe color=1,0.25,0.15 intensity=60 range=10
+
+# --- 3. Un garde dont la ronde passe SOUS la herse ------------------------
+#
+# Il attend qu'elle se leve. Avant le 08/10 il la traversait : les PNJ ne
+# connaissaient que le decor. Pour le voir bloque : ent_send horloge Arreter.
+
+entity npc_dummy        6 0 6   180 0   name=garde behaviour=patrol path=herse speed=2.5 sight=0
+entity info_waypoint    6 0 -5    0 0   path=herse order=0
+entity info_waypoint    6 0 6     0 0   path=herse order=1
+
+# --- 4. Un veilleur ENDORMI, que la herse reveille --------------------------
+
+entity npc_dummy       -6 0 6   180 0   name=veilleur behaviour=idle path=veille speed=2 sight=0
+entity info_waypoint   -6 0 10    0 0   path=veille order=0
+entity info_waypoint   -9 0 6     0 0   path=veille order=1
+
+# --- Lumieres -------------------------------------------------------------
+
+light_dir -0.35 -1 -0.25   0.62 0.70 0.85   1.6
+
+light_point  0 4 4      1 0.85 0.6    100 16
+light_point  6 4 4      0.6 0.8 1     100 16

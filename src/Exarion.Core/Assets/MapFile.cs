@@ -86,6 +86,59 @@ namespace Exarion.Core.Assets
         public const string Extension = ".map";
 
         // ------------------------------------------------------------------
+        //  Empreinte
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Empreinte du DECOR SOLIDE d'une carte : FNV-1a 32 bits sur le centre
+        /// et la taille de chaque boite, au bit pres. Sert au reseau - le client
+        /// verifie qu'il predit dans le decor du serveur, pas seulement dans une
+        /// carte du meme nom.
+        ///
+        /// ⚠️⚠️ LE DECOR SOLIDE, PAS LE FICHIER. Premiere version : le texte
+        /// enregistre entier. Elle aurait refuse deux joueurs sur le bac a sable
+        /// INTEGRE des que leurs reglages d'eclairage different - ses
+        /// intensites viennent d'exarion.cfg, et les lumieres font partie du
+        /// texte. Or le serveur ne simule QUE les boites (ToCollisionWorld) :
+        /// couleurs, formes, lumieres et entites ne changent rien a la
+        /// prediction. Et les bits flottants plutot que du texte : ni culture,
+        /// ni saut de ligne du systeme (« \r\n » sous Windows, « \n » sous
+        /// macOS) ne peuvent s'en meler.
+        /// </summary>
+        public static uint Fingerprint(MapData map)
+        {
+            ArgumentNullException.ThrowIfNull(map);
+
+            uint hash = 2166136261u;
+
+            void Mix(uint value)
+            {
+                for (int shift = 0; shift < 32; shift += 8)
+                {
+                    hash ^= (value >> shift) & 0xFFu;
+                    hash *= 16777619u;
+                }
+            }
+
+            void MixVector(Vector3 v)
+            {
+                Mix(BitConverter.SingleToUInt32Bits(v.X));
+                Mix(BitConverter.SingleToUInt32Bits(v.Y));
+                Mix(BitConverter.SingleToUInt32Bits(v.Z));
+            }
+
+            Mix((uint)map.Boxes.Count);
+
+            foreach (MapBox box in map.Boxes)
+            {
+                MixVector(box.Center);
+                MixVector(box.Size);
+            }
+
+            return hash;
+        }
+
+        // ------------------------------------------------------------------
         //  Ecriture
         // ------------------------------------------------------------------
 

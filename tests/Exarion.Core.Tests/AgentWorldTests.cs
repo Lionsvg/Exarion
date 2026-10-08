@@ -374,6 +374,171 @@ namespace Exarion.Tests
             ClassicAssert.AreEqual("Declencher", world.Events[0].Input);
         }
 
+        /// <summary>
+        /// ⚠️ Les sorties d'un PNJ doivent ARRIVER. Jusqu'au 08/10 elles
+        /// n'etaient que rapportees : le HUD affichait
+        /// « npc_dummy.OnSpotPlayer -> porte.Ouvrir », et la porte restait
+        /// fermee - le seul emetteur dont personne ne livrait les sorties.
+        /// </summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        public void Les_Sorties_D_Un_PNJ_Sont_LIVREES(bool withRouter)
+        {
+            var map = new MapData();
+            map.Entities.Add(Npc(Vector3.Zero,
+                ("sight", "40"), ("fov", "360"), ("behaviour", "idle"),
+                ("target", "porte"), ("input_spot", "Ouvrir")));
+            map.Entities.Add(new MapEntity(EntityTypes.Door, new Vector3(0f, 0f, 20f)).Set("name", "porte"));
+
+            // Meme ordre que le jeu : les entites d'abord, PUIS les portes
+            // s'y inscrivent (Load efface les cibles inscrites).
+            var entities = new EntityWorld();
+            entities.Load(map);
+
+            var movers = new MoverWorld();
+            movers.Load(map);
+            movers.RegisterInto(entities);
+
+            var world = new AgentWorld();
+            world.Load(map, Ground());
+
+            world.Update(Step, new Vector3(0f, 1.6f, -8f), withRouter ? entities : null);
+
+            ClassicAssert.AreEqual(AgentWorld.OnSpotPlayer, world.Events[0].Output);
+
+            if (withRouter)
+            {
+                ClassicAssert.AreEqual(EntityDelivery.Delivree, world.Events[0].Delivery);
+                ClassicAssert.AreEqual(MoverState.Ouverture, movers.Find("porte")!.State, "la porte doit s'ouvrir");
+            }
+            else
+            {
+                // La contre-epreuve : c'est exactement ce que faisait le jeu.
+                ClassicAssert.AreEqual(MoverState.Ferme, movers.Find("porte")!.State);
+            }
+        }
+
+        // ===================================================================
+        //  Ce qui est solide : le decor, mais aussi les portes
+        // ===================================================================
+
+        /// <summary>Un mur perce d'une ouverture de 3 m en x = 0, et une porte qui la bouche.</summary>
+        private static (CollisionWorld Level, MoverWorld Movers) WallWithDoor()
+        {
+            var level = Ground();
+            level.AddBox(new Vector3(-6.5f, 1.75f, 0f), new Vector3(10f, 3.5f, 0.4f));
+            level.AddBox(new Vector3(6.5f, 1.75f, 0f), new Vector3(10f, 3.5f, 0.4f));
+
+            var map = new MapData();
+            map.Entities.Add(new MapEntity(EntityTypes.Door, Vector3.Zero)
+                .Set("name", "porte").Set("width", "3").Set("height", "3.5").Set("distance", "4"));
+
+            var movers = new MoverWorld();
+            movers.Load(map);
+            return (level, movers);
+        }
+
+        /// <summary>Le monde solide d'un pas : le decor, plus la porte a sa position du moment.</summary>
+        private static CollisionWorld Solid(CollisionWorld level, MoverWorld movers)
+        {
+            var solid = new CollisionWorld();
+
+            foreach (Aabb box in level.Boxes)
+                solid.Add(box);
+
+            movers.AppendTo(solid);
+            return solid;
+        }
+
+        /// <summary>
+        /// ⚠️ Un garde dont la ronde passe par une porte FERMEE doit s'y arreter.
+        /// Il ne connaissait que le decor : il la traversait. La contre-epreuve
+        /// (sans monde solide) reproduit exactement ce defaut.
+        /// </summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        public void Une_Porte_Fermee_Arrete_Le_Garde(bool withSolid)
+        {
+            (CollisionWorld level, MoverWorld movers) = WallWithDoor();
+
+            var map = new MapData();
+            map.Entities.Add(Npc(new Vector3(0f, 0f, 6f), ("path", "ronde"), ("speed", "3"), ("sight", "0")));
+            map.Entities.Add(Waypoint(new Vector3(0f, 0f, -6f), "ronde", 0));
+            map.Entities.Add(Waypoint(new Vector3(0f, 0f, 6f), "ronde", 1));
+
+            var world = new AgentWorld();
+            world.Load(map, level);
+
+            CollisionWorld solid = Solid(level, movers);
+
+            // 3 s : assez pour franchir l'ouverture (9 m a 3 m/s), pas assez pour
+            // atteindre le point et REVENIR - sinon la contre-epreuve repasserait
+            // du bon cote de la porte.
+            for (int i = 0; i < 64 * 3; i++)
+                world.Update(Step, new Vector3(0f, -100f, 0f), null, withSolid ? solid : null);
+
+            float z = world.Agents[0].Position.Z;
+
+            if (withSolid)
+                Assert.That(z, Is.GreaterThan(0.3f), $"le garde a traverse la porte fermee (z = {z:0.00})");
+            else
+                Assert.That(z, Is.LessThan(0f), "la contre-epreuve : sans la porte, il passe");
+        }
+
+        [Test]
+        public void Une_Porte_Ouverte_Laisse_Passer_Le_Garde()
+        {
+            (CollisionWorld level, MoverWorld movers) = WallWithDoor();
+
+            var map = new MapData();
+            map.Entities.Add(Npc(new Vector3(0f, 0f, 6f), ("path", "ronde"), ("speed", "3"), ("sight", "0")));
+            map.Entities.Add(Waypoint(new Vector3(0f, 0f, -6f), "ronde", 0));
+            map.Entities.Add(Waypoint(new Vector3(0f, 0f, 6f), "ronde", 1));
+
+            var world = new AgentWorld();
+            world.Load(map, level);
+
+            // La porte s'ouvre d'abord : 4 m a 2 m/s.
+            movers.Find("porte")!.Receive(Mover.InputOpen);
+
+            for (int i = 0; i < 64 * 3; i++)
+                movers.Step(Step);
+
+            CollisionWorld solid = Solid(level, movers);
+
+            for (int i = 0; i < 64 * 3; i++)
+                world.Update(Step, new Vector3(0f, -100f, 0f), null, solid);
+
+            Assert.That(world.Agents[0].Position.Z, Is.LessThan(0f), "porte ouverte, il doit passer");
+        }
+
+        [Test]
+        public void Une_Porte_Fermee_Cache_Le_Joueur()
+        {
+            (CollisionWorld level, MoverWorld movers) = WallWithDoor();
+
+            var map = new MapData();
+            map.Entities.Add(Npc(new Vector3(0f, 0f, 6f), ("behaviour", "idle"), ("sight", "40"), ("fov", "360")));
+
+            var world = new AgentWorld();
+            world.Load(map, level);
+
+            // Le joueur juste derriere la porte.
+            Vector3 eye = new(0f, 1.6f, -4f);
+
+            world.Update(Step, eye, null, Solid(level, movers));
+            ClassicAssert.IsFalse(world.Agents[0].SeesPlayer, "il voit a travers la porte fermee");
+
+            // Ouverte, plus rien ne cache le joueur.
+            movers.Find("porte")!.Receive(Mover.InputOpen);
+
+            for (int i = 0; i < 64 * 3; i++)
+                movers.Step(Step);
+
+            world.Update(Step, eye, null, Solid(level, movers));
+            ClassicAssert.IsTrue(world.Agents[0].SeesPlayer, "porte ouverte, il doit le voir");
+        }
+
         [Test]
         public void Un_PNJ_Se_Retrouve_Par_Son_Nom()
         {

@@ -19,4 +19,8 @@ if errorlevel 1 (
 )
 
 echo.
-dotnet run --project src\Exarion.Game -c Release --no-build --no-launch-profile -- %*
+REM PAS de --no-build, meme juste apres une compilation reussie : c'est le
+REM piege qui a fait conclure plusieurs fois de travers sur ce projet (un
+REM binaire perime lance a la place du nouveau). Sans lui, dotnet run refait
+REM une compilation incrementale, quasi gratuite, et lance le bon binaire.
+dotnet run --project src\Exarion.Game -c Release --no-launch-profile -- %*

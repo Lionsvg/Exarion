@@ -95,6 +95,18 @@ namespace Exarion.Core.Console
 
         public int MaxOutputLines { get; set; } = 200;
 
+        /// <summary>
+        /// Chaque ligne imprimee, au moment ou elle l'est.
+        ///
+        /// ⚠️ C'EST LA SEULE FACON FIABLE DE SUIVRE LA SORTIE. Output est
+        /// BORNE : passe MaxOutputLines, les plus anciennes lignes partent, et
+        /// son compte ne bouge plus. Le bac a sable recopiait la sortie des
+        /// --exec en comparant ce compte avant et apres chaque commande - au
+        /// bout de 200 lignes, plus rien ne sortait, sans erreur. Constate le
+        /// 07/10 : un inventaire de 126 commandes s'arretait a la 66e.
+        /// </summary>
+        public event Action<string>? LinePrinted;
+
         public ConVar Register(ConVar variable)
         {
             _vars[variable.Name] = variable;
@@ -122,9 +134,104 @@ namespace Exarion.Core.Console
 
             if (_output.Count > MaxOutputLines)
                 _output.RemoveRange(0, _output.Count - MaxOutputLines);
+
+            LinePrinted?.Invoke(line);
         }
 
         public void Clear() => _output.Clear();
+
+        // ------------------------------------------------------------------
+        //  Commandes DIFFEREES : « delay 3 ent_send porte Ouvrir »
+        //
+        //  ⚠️ POURQUOI C'EST DANS LE MOTEUR. Tous les --exec partent a t = 0,
+        //  avant que quoi que ce soit n'ait bouge : impossible, en headless,
+        //  de tirer APRES une connexion, d'ouvrir une porte a mi-course, de
+        //  basculer un reglage au milieu d'une mesure. Le seul recours etait
+        //  d'ecrire une commande dediee par besoin (walk, character_phase...).
+        //  Une commande differee les couvre toutes.
+        //
+        //  Le temps est celui de la SIMULATION (Advance, au pas fixe), pas
+        //  l'horloge murale : une fenetre masquee tourne au ralenti (mesure
+        //  sous macOS : 4 pas/s), et « dans 3 s » doit vouloir dire 3 s de jeu.
+        // ------------------------------------------------------------------
+
+        private readonly List<(double Due, long Order, string Line)> _scheduled = new();
+        private readonly List<(double Due, long Order, string Line)> _dueNow = new();
+        private double _clock;
+        private long _order;
+
+        /// <summary>Commandes differees en attente.</summary>
+        public int ScheduledCount => _scheduled.Count;
+
+        /// <summary>Programme une ligne de console dans « seconds » secondes de simulation.</summary>
+        public void Schedule(double seconds, string line)
+        {
+            if (string.IsNullOrWhiteSpace(line) || !double.IsFinite(seconds) || seconds < 0.0)
+                return;
+
+            _scheduled.Add((_clock + seconds, _order++, line.Trim()));
+        }
+
+        /// <summary>
+        /// Fait avancer l'horloge des commandes differees, et execute celles
+        /// qui sont dues - dans l'ordre de leur echeance, puis de leur
+        /// programmation. A appeler au PAS FIXE, quel que soit l'etat du jeu.
+        ///
+        /// ⚠️ Une commande programmee PENDANT cette execution (« delay 0
+        /// delay 0 ... ») attend l'appel suivant : on n'execute que ce qui etait
+        /// du AU DEBUT. Meme regle que la logique - une chaine ne peut pas
+        /// tourner en rond dans un seul appel.
+        /// </summary>
+        public void Advance(double dt)
+        {
+            if (!(dt > 0.0))
+                return;
+
+            _clock += dt;
+
+            if (_scheduled.Count == 0)
+                return;
+
+            _dueNow.Clear();
+
+            for (int i = 0; i < _scheduled.Count;)
+            {
+                if (_scheduled[i].Due <= _clock + 1e-9)
+                {
+                    _dueNow.Add(_scheduled[i]);
+                    _scheduled.RemoveAt(i);
+                }
+                else
+                {
+                    i++;
+                }
+            }
+
+            _dueNow.Sort((a, b) => a.Due != b.Due ? a.Due.CompareTo(b.Due) : a.Order.CompareTo(b.Order));
+
+            // Une COPIE : Execute peut programmer d'autres lignes, et la liste
+            // de travail ne doit pas changer sous la boucle.
+            foreach ((double _, long _, string line) in _dueNow.ToArray())
+                Execute(line);
+        }
+
+        private void ScheduleFromLine(string[] parts)
+        {
+            // « 2,5 » est accepte comme « 2.5 » : la console est tapee par des
+            // gens, sur des claviers francais.
+            if (parts.Length < 3
+                || !double.TryParse(parts[1].Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)
+                || !double.IsFinite(seconds) || seconds < 0.0)
+            {
+                Print("  delay <secondes> <commande> - execute la commande plus tard (temps de simulation)");
+                return;
+            }
+
+            string line = string.Join(' ', parts, 2, parts.Length - 2);
+            Schedule(seconds, line);
+
+            Print($"  dans {seconds.ToString("0.###", CultureInfo.InvariantCulture)} s : {line}");
+        }
 
         /// <summary>
         /// Execute une ligne. Formes reconnues :
@@ -163,6 +270,10 @@ namespace Exarion.Core.Console
 
                 case "clear":
                     Clear();
+                    return;
+
+                case "delay":
+                    ScheduleFromLine(parts);
                     return;
             }
 

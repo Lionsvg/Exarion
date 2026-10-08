@@ -48,10 +48,10 @@ C'est là que tout se règle et se démontre.
 
 ⚠️ **Le personnage animé n'est pas fourni.** Le bac à sable cherche un modèle `.glb` dans un
 dossier `Model3D/` et démarre sans lui s'il n'y en a pas ; les 22 tests qui l'utilisent sont
-alors **ignorés**, pas en échec. **Conséquence visible : les PNJ et les joueurs distants en
-réseau sont simulés mais invisibles** — c'est ce modèle qui les dessine. Pour les voir, déposer
-dans `Model3D/` un glTF binaire skinné ; ses animations « Walking » et « Running » servent de
-marche et de course, à défaut les deux premières.
+alors **ignorés**, pas en échec. Sans modèle, les PNJ et les joueurs distants sont dessinés en
+**silhouette de primitives**, avec leur ombre. Pour les voir animés, déposer dans `Model3D/` un
+glTF binaire skinné ; ses animations « Walking » et « Running » servent de marche et de course,
+à défaut les deux premières.
 
 ---
 
@@ -61,7 +61,7 @@ marche et de course, à défaut les deux premières.
 |---|---|---|
 | `src/Exarion.Core` | Logique : temps, physique, cartes, audio, animation, entités, PNJ | **rien** |
 | `src/Exarion.Engine` | Fenêtre, GPU, passes de rendu, périphérique audio | Core + Silk.NET + miniaudio |
-| `src/Exarion.Game` | Le bac à sable : menu, éditeur, console, contenu de démo | Core + Engine |
+| `src/Exarion.Game` | Le bac à sable : `SandboxApp` orchestre, un dossier par sous-système (`World`, `Gameplay`, `Editing`, `Rendering`, `Ui`, `Commands`…) | Core + Engine |
 | `samples/Exarion.Sample` | Un jeu minimal | Core + Engine |
 | `tests/Exarion.Core.Tests` | Les tests | Core |
 
@@ -235,22 +235,25 @@ mauvaise échelle (62 pixels modifiés au lieu de 1 626).
 
 Dit franchement, parce que la liste compte autant que le reste.
 
-- **Le tir n'est pas arbitré par le serveur.** Le rembobinage des hitbox est écrit et testé,
-  mais le tir du bac à sable reste **local** : il ne passe pas par le réseau. C'est le dernier
-  fil à tirer de la phase 3.
-- **Le client ne charge pas la carte du serveur.** Il prédit dans *sa* carte ; si le serveur en
-  fait tourner une autre, la prédiction est fausse (`net` affiche le nom pour qu'on le voie).
+- **Un tir n'a aucun effet de jeu.** Le serveur l'arbitre (rembobinage compris) et renvoie le
+  verdict — touché, raté, refusé — mais il n'y a ni points de vie ni mort : c'est du contenu de
+  jeu, hors du périmètre du moteur.
+- **Les entités ne sont pas synchronisées en réseau.** Le client charge bien la carte du serveur
+  (vérifiée par empreinte du décor, refusée si elle diffère), mais portes, logique et PNJ
+  tournent chez chacun : une porte ouverte chez l'un reste fermée chez l'autre.
 - **Le réseau n'a jamais tourné entre deux vraies machines** — loopback et réseau simulé
   seulement. Pas de delta-compression, pas de jeton de session.
 - **Pas de jeu.** `RoundMachine`, l'économie et un arsenal de 7 armes existent et sont testés
   dans `Core`, mais rien n'est branché sur une partie jouable.
-- **Pas de recherche de chemin.** Les PNJ marchent en ligne droite et se coincent sur tout
-  obstacle de plus de 45 cm.
-- **Une seule entité agit : `func_door`.** Le câblage sorties → entrées fonctionne de bout en
-  bout, mais il n'y a encore rien d'autre à viser — pas d'entité qui allume une lumière, joue
-  un son, compte, ou réveille un PNJ.
-- **Une porte qui se referme sur le joueur le repousse**, elle ne l'écrase pas et ne rouvre
-  pas. Pas de notion de blocage.
+- **La recherche de chemin ne voit que le décor.** Les PNJ contournent les murs, montent les
+  escaliers et s'approchent au plus près d'une cible inaccessible (`maps/chemins.map`,
+  `nav_show 1`) — mais portes, caisses et autres PNJ ne sont pas dans la grille : un garde peut
+  planifier à travers une porte fermée et y buter. Pas de saut.
+- **Les entités qui agissent restent simples.** Portes et ascenseurs, logique (relais,
+  minuterie, compteur), lumières et sons commutables, PNJ qu'on réveille — tout câblé en
+  sorties → entrées (`maps/logique.map`). Mais un son n'est qu'un **bip synthétisé** (pas de
+  fichier WAV par entité), une lumière n'est que **ponctuelle**, et une sortie ne vise qu'**une**
+  cible.
 - **Pas de rotation dans le format de carte.** Les boîtes de décor sont alignées sur les axes ;
   seuls les corps dynamiques tournent. Une porte coulisse ou monte, elle ne pivote pas.
 - **Pas de modèle 3D plaçable dans une carte.** L'import glTF existe, mais aucun type d'entité

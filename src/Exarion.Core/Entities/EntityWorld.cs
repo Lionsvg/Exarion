@@ -226,7 +226,15 @@ namespace Exarion.Core.Entities
 
             if (string.Equals(entity.Type, EntityTypes.Checkpoint, StringComparison.Ordinal))
             {
-                string name = entity.Get("name", entity.Get("order", Checkpoints.Count.ToString()));
+                // ⚠️⚠️ LE NOM DE REPLI DOIT ETRE STABLE. Il valait le nombre de
+                // checkpoints deja franchis : un checkpoint sans nom ni ordre,
+                // franchi deux fois, s'appelait « 0 » puis « 1 » - et comptait
+                // DOUBLE, exactement ce que la regle ci-dessous interdit. Trouve
+                // le 08/10 par EntitySchemaTests, pas en jouant. Le rang de
+                // l'entite dans la carte, lui, ne change pas d'un passage a
+                // l'autre, et distingue deux checkpoints anonymes.
+                string name = entity.Get("name",
+                    entity.Get("order", "#" + index.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
                 // ⚠️ Un checkpoint ne s'enregistre QU'UNE FOIS, meme sans
                 // « once » : repasser dessus ne doit pas allonger la liste.

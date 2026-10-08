@@ -205,6 +205,10 @@ namespace Exarion.Core.Net
         public byte LocalId { get; private set; }
 
         public string ServerMap { get; private set; } = "";
+
+        /// <summary>Empreinte du CONTENU de la carte du serveur. Voir MapSync.</summary>
+        public uint ServerMapFingerprint { get; private set; }
+
         public string RejectReason { get; private set; } = "";
 
         /// <summary>Dernier pas de serveur recu.</summary>
@@ -361,6 +365,87 @@ namespace Exarion.Core.Net
             BytesSent += writer.Length;
         }
 
+        // -------------------------------------------------------------------
+        //  TIR ARBITRE (3.7, branche le 08/10)
+        // -------------------------------------------------------------------
+
+        private uint _shotId;
+
+        /// <summary>
+        /// Le pas SERVEUR - fractionnaire - que le joueur voit en ce moment :
+        /// celui ou l'interpolation (3.4) place les autres joueurs. C'est
+        /// l'instant que le serveur rembobinera pour juger un tir.
+        ///
+        /// ⚠️ Pas le dernier pas recu : le joueur voit les autres AVEC le
+        /// retard d'interpolation. Juger sur le dernier pas, c'est juger sur une
+        /// position qu'il n'a jamais vue.
+        /// </summary>
+        public double ViewTick => _playbackStarted && ServerStep > 0f ? _playback / ServerStep : ServerTick;
+
+        public int ShotsSent { get; private set; }
+
+        /// <summary>Verdicts recus du serveur. Le dernier est dans LastShot.</summary>
+        public int ShotReports { get; private set; }
+
+        public int HitsConfirmed { get; private set; }
+
+        public ShotReport LastShot { get; private set; }
+
+        /// <summary>
+        /// Tire : le serveur jugera, et repondra par un HitReport.
+        ///
+        /// Le tir local du jeu (impacts, son) reste immediat - attendre
+        /// l'aller-retour pour voir l'etincelle serait la latence complete que
+        /// la prediction a justement supprimee. Seul le VERDICT vient du serveur.
+        /// </summary>
+        /// <returns>Le numero du tir, 0 si pas connecte.</returns>
+        public uint SendFire(Vector3 origin, Vector3 direction)
+        {
+            if (State != NetClientState.Connecte)
+                return 0;
+
+            _shotId++;
+
+            double view = Math.Max(0.0, ViewTick);
+            uint whole = (uint)Math.Floor(view);
+
+            var writer = new NetWriter(_out);
+
+            writer.Byte(NetMessage.Fire);
+            writer.UInt(_shotId);
+            writer.UInt(whole);
+            writer.Float((float)(view - whole));
+            writer.Vector3(origin);
+            writer.Vector3(direction);
+
+            if (writer.Overflowed)
+                return 0;
+
+            _transport.Send(_server, _out, writer.Length);
+            BytesSent += writer.Length;
+            ShotsSent++;
+
+            return _shotId;
+        }
+
+        private void OnHitReport(ref NetReader reader)
+        {
+            uint shot = reader.UInt();
+            byte victim = reader.Byte();
+            Vector3 point = reader.Vector3();
+            float distance = reader.Float();
+            byte flags = reader.Byte();
+
+            if (reader.Failed)
+                return;
+
+            LastShot = new ShotReport(shot, victim, point, distance, flags);
+            ShotReports++;
+
+            if (victim != 0)
+                HitsConfirmed++;
+        }
+
         /// <summary>Envoie une mesure d'aller-retour.</summary>
         public void SendPing()
         {
@@ -416,6 +501,7 @@ namespace Exarion.Core.Net
                 case NetMessage.Reject: OnReject(ref reader); break;
                 case NetMessage.Snapshot: OnSnapshot(ref reader); break;
                 case NetMessage.Pong: OnPong(ref reader); break;
+                case NetMessage.HitReport: OnHitReport(ref reader); break;
 
                 case NetMessage.Bye:
                     State = NetClientState.Deconnecte;
@@ -432,6 +518,7 @@ namespace Exarion.Core.Net
             byte id = reader.Byte();
             float step = reader.Float();
             string map = reader.ShortString();
+            uint fingerprint = reader.UInt();
             Vector3 spawn = reader.Vector3();
 
             if (reader.Failed || version != NetConfig.Version)
@@ -445,6 +532,7 @@ namespace Exarion.Core.Net
 
             LocalId = id;
             ServerMap = map;
+            ServerMapFingerprint = fingerprint;
             ServerStep = step;
             Spawn = spawn;
             State = NetClientState.Connecte;

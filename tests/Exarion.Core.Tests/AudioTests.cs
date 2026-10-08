@@ -359,5 +359,31 @@ namespace Exarion.Tests
             Array.Fill(samples, value);
             return new AudioClip(samples, 1, 48000);
         }
+
+        /// <summary>
+        /// ⚠️ Un bip fait pour BOUCLER : ses deux bouts valent zero, sinon la
+        /// boucle claque a chaque tour. Et le silence fait bien partie du clip :
+        /// c'est lui qui donne le rythme.
+        /// </summary>
+        [Test]
+        public void Un_Bip_Boucle_Sans_Claquement()
+        {
+            AudioClip beep = SoundGen.Beep(440f, 0.25f, 0.25f, 48000);
+
+            ClassicAssert.AreEqual(24000, beep.FrameCount, "0,25 s de son + 0,25 s de silence");
+            ClassicAssert.AreEqual(0f, beep.Samples[0], 1e-6f);
+            ClassicAssert.AreEqual(0f, beep.Samples[^1], 1e-6f);
+
+            // Le silence est un vrai silence...
+            for (int i = 12000; i < 24000; i++)
+                ClassicAssert.AreEqual(0f, beep.Samples[i], $"echantillon {i}");
+
+            // ... et le bip, un vrai son.
+            float peak = 0f;
+            for (int i = 0; i < 12000; i++)
+                peak = MathF.Max(peak, MathF.Abs(beep.Samples[i]));
+
+            ClassicAssert.AreEqual(0.5f, peak, 0.01f);
+        }
     }
 }

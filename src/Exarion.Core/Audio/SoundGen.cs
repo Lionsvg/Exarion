@@ -109,6 +109,29 @@ namespace Exarion.Core.Audio
             return new AudioClip(samples, 1, sampleRate);
         }
 
+        /// <summary>
+        /// Un BIP suivi d'un silence, fait pour etre joue EN BOUCLE : une
+        /// alarme, un signal.
+        ///
+        /// ⚠️ POURQUOI PAS Tone EN BOUCLE. Tone porte une enveloppe (voir plus
+        /// haut) : bouclee, elle retombe a zero a chaque tour, et le son
+        /// « respire » au rythme de la boucle - un defaut qui s'entend sans se
+        /// comprendre. Ici le silence fait partie du clip : le premier et le
+        /// dernier echantillon valent zero, la boucle se raccorde donc sans
+        /// discontinuite, et le rythme est voulu.
+        /// </summary>
+        public static AudioClip Beep(float frequency, float onSeconds, float offSeconds,
+                                     int sampleRate = 48000, float amplitude = 0.5f)
+        {
+            float[] tone = Tone(frequency, onSeconds, sampleRate, amplitude).Samples;
+            int silence = Math.Max(1, (int)(offSeconds * sampleRate));
+
+            var samples = new float[tone.Length + silence];
+            Array.Copy(tone, samples, tone.Length);
+
+            return new AudioClip(samples, 1, sampleRate);
+        }
+
         /// <summary>Montee au debut, descente a la fin, plat au milieu.</summary>
         private static float Envelope(int index, int count, int fadeFrames)
         {

@@ -32,6 +32,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Exarion.Core.Assets;
+using Exarion.Core.Navigation;
 using Exarion.Core.Physics;
 
 namespace Exarion.Core.Entities
@@ -90,6 +91,48 @@ namespace Exarion.Core.Entities
         public Vector3 Eye => Motor.Position + new Vector3(0f, Motor.Height * 0.9f, 0f);
 
         public string Name => Definition.Get("name");
+
+        // --- Chemin (E16) ---------------------------------------------------
+
+        internal readonly List<Vector3> PathPoints = new();
+        internal int PathIndex;
+        internal float ReplanIn;
+
+        /// <summary>Le chemin suivi, en positions de pieds. Vide quand il marche droit.</summary>
+        public IReadOnlyList<Vector3> Path => PathPoints;
+
+        /// <summary>Indice du point du chemin vise en ce moment.</summary>
+        public int PathCursor => PathIndex;
+
+        /// <summary>Comment il se dirige en ce moment. Affiche par « nav ».</summary>
+        public AgentNavMode NavMode { get; internal set; }
+
+        /// <summary>
+        /// Vrai quand sa cible est HORS D'ATTEINTE : il s'en approche au plus
+        /// pres, puis l'attend tourne vers elle - au lieu de pousser contre le
+        /// mur qui l'en separe.
+        /// </summary>
+        public bool NoPath => NavMode == AgentNavMode.Approach;
+    }
+
+    /// <summary>Comment un PNJ se dirige vers sa cible.</summary>
+    public enum AgentNavMode
+    {
+        /// <summary>En ligne droite : rien ne barre la route (ou pas de grille).</summary>
+        Direct,
+
+        /// <summary>Le long d'un chemin calcule, qui mene a la cible.</summary>
+        Path,
+
+        /// <summary>Cible hors d'atteinte : chemin vers le point le plus proche, puis attente.</summary>
+        Approach,
+
+        /// <summary>
+        /// Le PNJ n'est sur aucun sol de la grille (pousse dans un recoin,
+        /// tombe hors du decor) : il retombe sur la ligne droite d'avant E16,
+        /// qui a au moins une chance de l'en sortir.
+        /// </summary>
+        OffGrid,
     }
 
     public sealed class AgentWorld
@@ -97,6 +140,14 @@ namespace Exarion.Core.Entities
         public const string OnSpotPlayer = "OnSpotPlayer";
         public const string OnLosePlayer = "OnLosePlayer";
         public const string OnReachGoal = "OnReachGoal";
+
+        // Entrees : un PNJ NOMME est une cible, comme une porte. C'est ce qui
+        // permet de « reveiller » un garde quand le joueur entre dans une
+        // salle, sans une ligne de code. En francais, comme les autres
+        // recepteurs du moteur.
+        public const string InputPatrol = "Patrouiller";
+        public const string InputStop = "Arreter";
+        public const string InputReturn = "Rentrer";
 
         /// <summary>
         /// Rayon d'arrivee sur un point de passage.
@@ -119,6 +170,42 @@ namespace Exarion.Core.Entities
         /// </summary>
         public const float LoseSeconds = 2.5f;
 
+        /// <summary>
+        /// Delai entre deux calculs de chemin d'un meme PNJ.
+        ///
+        /// Assez court pour suivre un joueur qui court (2,4 m a 4,76 m/s), assez
+        /// long pour qu'une poursuite ne relance pas un A* a CHAQUE pas : le
+        /// joueur change de case de grille vingt fois par seconde.
+        /// </summary>
+        public const float ReplanSeconds = 0.5f;
+
+        /// <summary>
+        /// Distance a laquelle un point du chemin est considere atteint. Plus
+        /// grande que le pas parcouru en un pas fixe (7 cm), meme raison que
+        /// ArriveRadius ; plus petite qu'une case et demie, sinon le PNJ couperait
+        /// les virages au ras des murs.
+        /// </summary>
+        public const float NodeReachRadius = 0.35f;
+
+        /// <summary>
+        /// Ecart de hauteur au-dela duquel une cible n'est PAS atteinte, meme a
+        /// la verticale.
+        ///
+        /// ⚠️ SANS LUI, UNE PASSERELLE EST UN PIEGE. L'arrivee ne regardait que
+        /// la distance au sol : un point de ronde pose sur une passerelle etait
+        /// « atteint » des que le garde passait DESSOUS, et un joueur debout
+        /// au-dessus de lui etait « rejoint ». 1,5 m laisse passer un joueur qui
+        /// saute ou se tient sur une caisse, pas un etage.
+        ///
+        /// Seulement quand le calcul de chemin est actif : sans lui, le PNJ ne
+        /// peut de toute facon pas monter, et nav_enabled 0 doit rester le
+        /// comportement d'avant E16 a l'identique.
+        /// </summary>
+        public const float ArriveHeight = 1.5f;
+
+        /// <summary>Hauteur des yeux du joueur au-dessus de ses pieds (1,83 - 0,18).</summary>
+        private const float PlayerEyeAboveFeet = 1.65f;
+
         private readonly List<Agent> _agents = new();
         private readonly List<EntityEvent> _events = new();
 
@@ -133,6 +220,19 @@ namespace Exarion.Core.Entities
         public IReadOnlyList<EntityEvent> Events => _events;
 
         public int TotalEvents { get; private set; }
+
+        /// <summary>La grille de navigation de la carte, ou null s'il n'y a ni PNJ ni decor.</summary>
+        public NavGrid? Navigation { get; private set; }
+
+        /// <summary>Temps de construction de la grille, en millisecondes. Affiche par « nav ».</summary>
+        public double NavigationBuildMilliseconds { get; private set; }
+
+        /// <summary>
+        /// « nav_enabled » : faux, les PNJ marchent en ligne droite comme avant
+        /// E16. Existe pour COMPARER - c'est le seul moyen de voir, sur la meme
+        /// carte, ce que le calcul de chemin change.
+        /// </summary>
+        public bool NavigationEnabled { get; set; } = true;
 
         /// <summary>
         /// Reconstruit les PNJ depuis la carte.
@@ -171,6 +271,86 @@ namespace Exarion.Core.Entities
 
                 _agents.Add(agent);
             }
+
+            // La grille decrit le corps d'un PNJ : MEMES dimensions que son
+            // CharacterMotor (seules les vitesses changent d'un PNJ a l'autre).
+            // Construite seulement s'il y a quelqu'un pour s'en servir.
+            Navigation = null;
+            NavigationBuildMilliseconds = 0;
+
+            if (_agents.Count > 0 && world != null)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                Navigation = NavGrid.Build(world, NavAgentShape.From(new MotorSettings()));
+                NavigationBuildMilliseconds = clock.Elapsed.TotalMilliseconds;
+            }
+        }
+
+        /// <summary>
+        /// Inscrit chaque PNJ nomme comme cible d'entrees. A appeler APRES
+        /// EntityWorld.Load, qui efface les cibles inscrites - meme regle que
+        /// les portes et la logique.
+        /// </summary>
+        public void RegisterInto(EntityWorld world)
+        {
+            ArgumentNullException.ThrowIfNull(world);
+
+            foreach (Agent agent in _agents)
+                world.Register(new AgentInput(this, agent));
+        }
+
+        /// <summary>
+        /// Le PNJ vu comme un recepteur. Un adaptateur plutot qu'Agent lui-meme :
+        /// une entree change l'ETAT, et les transitions d'etat appartiennent au
+        /// monde des PNJ (remise a zero du chemin, rondes connues de lui seul).
+        /// </summary>
+        private sealed class AgentInput : IEntityInput
+        {
+            private readonly AgentWorld _world;
+            private readonly Agent _agent;
+
+            public AgentInput(AgentWorld world, Agent agent)
+            {
+                _world = world;
+                _agent = agent;
+            }
+
+            public string Name => _agent.Name;
+
+            public bool Receive(string input) => _world.Command(_agent, input);
+        }
+
+        private bool Command(Agent agent, string input)
+        {
+            if (string.Equals(input, InputPatrol, StringComparison.OrdinalIgnoreCase))
+            {
+                // ⚠️ Sans ronde, il RESTE au repos. Le passer en Patrol sans
+                // point a viser le laisserait immobile dans un etat que le HUD
+                // afficherait comme une ronde en cours.
+                if (PathOf(agent.Definition).Count > 0)
+                {
+                    agent.State = AgentState.Patrol;
+                    ResetNavigation(agent);
+                }
+
+                return true;
+            }
+
+            if (string.Equals(input, InputStop, StringComparison.OrdinalIgnoreCase))
+            {
+                agent.State = AgentState.Idle;
+                ResetNavigation(agent);
+                return true;
+            }
+
+            if (string.Equals(input, InputReturn, StringComparison.OrdinalIgnoreCase))
+            {
+                agent.State = AgentState.Return;
+                ResetNavigation(agent);
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -217,16 +397,43 @@ namespace Exarion.Core.Entities
         /// Fait avancer tous les PNJ d'un pas.
         /// </summary>
         /// <param name="playerEye">Position des yeux du joueur, pas de ses pieds.</param>
-        public void Update(float dt, Vector3 playerEye)
+        /// <param name="router">
+        /// Le monde des entites, qui LIVRE les sorties a leur cible. Sans lui,
+        /// les evenements sont emis mais n'atteignent personne (NonCablee) -
+        /// ce qui etait le cas en jeu jusqu'au 08/10, sans que rien ne le dise.
+        /// </param>
+        /// <param name="solid">
+        /// Ce qui est SOLIDE a ce pas : decor, caisses, portes - le monde que
+        /// le jeu reconstruit pour le joueur. Sert au deplacement ET a la ligne
+        /// de vue. Null : le decor seul.
+        ///
+        /// ⚠️ Jusqu'au 08/10, les PNJ ne connaissaient que le DECOR : un garde
+        /// traversait une porte fermee, et voyait le joueur au travers. Le
+        /// calcul de chemin, lui, reste sur le decor : une porte s'ouvre et se
+        /// ferme, la grille ne se reconstruit pas a chaque fois.
+        /// </param>
+        public void Update(float dt, Vector3 playerEye, EntityWorld? router = null, CollisionWorld? solid = null)
         {
             _events.Clear();
 
             if (dt <= 0f)
                 return;
 
+            _router = router;
+            _solid = solid;
+
             for (int i = 0; i < _agents.Count; i++)
                 Step(_agents[i], dt, playerEye);
+
+            _router = null;
+            _solid = null;
         }
+
+        private EntityWorld? _router;
+        private CollisionWorld? _solid;
+
+        /// <summary>Le monde contre lequel on bouge et on regarde : le solide du pas, a defaut le decor.</summary>
+        private CollisionWorld? Solid => _solid ?? _world;
 
         private void Step(Agent agent, float dt, Vector3 playerEye)
         {
@@ -242,6 +449,7 @@ namespace Exarion.Core.Entities
             if (agent.SeesPlayer && !wasSeeing && agent.State != AgentState.Chase)
             {
                 agent.State = AgentState.Chase;
+                ResetNavigation(agent);
                 Emit(agent, OnSpotPlayer);
             }
             else if (agent.State == AgentState.Chase && agent.TimeSinceSeen > LoseSeconds)
@@ -251,6 +459,7 @@ namespace Exarion.Core.Entities
                     ? AgentState.Patrol
                     : AgentState.Return;
 
+                ResetNavigation(agent);
                 Emit(agent, OnLosePlayer);
             }
 
@@ -264,15 +473,35 @@ namespace Exarion.Core.Entities
                 delta.Y = 0f;
 
                 float distance = delta.Length();
+                Vector3 navGoal = NavigationGoal(agent, goal, playerEye);
 
-                if (distance > ArriveRadius)
+                bool reached = distance <= ArriveRadius
+                               && (!NavigationActive || MathF.Abs(navGoal.Y - agent.Position.Y) <= ArriveHeight);
+
+                if (!reached)
                 {
-                    // Convention de lacet du projet : 0 regarde vers -Z, et il
-                    // croit vers la gauche. La direction avant est donc
-                    // (-sin, -cos), d'ou ce atan2 - et pas l'inverse.
-                    agent.Yaw = MathF.Atan2(-delta.X / distance, -delta.Z / distance);
+                    // E16 : OU aller ce pas-ci. La cible elle-meme si on peut y
+                    // marcher droit ; sinon le prochain point du chemin ; null
+                    // si elle est hors d'atteinte et qu'on est au plus pres.
+                    Vector3? steer = SteeringPoint(agent, navGoal, dt);
 
-                    input.Move = new Vector2(0f, 1f);
+                    Vector3 toward = (steer ?? goal) - agent.Position;
+                    toward.Y = 0f;
+                    float length = toward.Length();
+
+                    if (length > 1e-4f)
+                    {
+                        // Convention de lacet du projet : 0 regarde vers -Z, et il
+                        // croit vers la gauche. La direction avant est donc
+                        // (-sin, -cos), d'ou ce atan2 - et pas l'inverse.
+                        agent.Yaw = MathF.Atan2(-toward.X / length, -toward.Z / length);
+                    }
+
+                    // Hors d'atteinte : il se tourne vers sa cible et l'attend.
+                    // Avant E16 il marchait droit dessus et poussait contre le
+                    // mur - a 0,0 m/s, contre une estrade de 1,80 m.
+                    if (steer.HasValue)
+                        input.Move = new Vector2(0f, 1f);
                 }
                 else
                 {
@@ -284,10 +513,115 @@ namespace Exarion.Core.Entities
 
             // Le PNJ se deplace avec le MEME moteur que le joueur : gravite,
             // franchissement de marches, glissement le long des murs.
-            agent.Motor.Step(input, dt, _world ?? EmptyWorld);
+            agent.Motor.Step(input, dt, Solid ?? EmptyWorld);
         }
 
         private static readonly CollisionWorld EmptyWorld = new();
+
+        /// <summary>
+        /// Ou le chemin doit mener. En poursuite, aux PIEDS reels du joueur -
+        /// la cible de deplacement, elle, est ramenee a la hauteur du PNJ pour
+        /// la ligne droite, ce qui designerait le sol SOUS une estrade ou se
+        /// tient le joueur, et non son dessus.
+        /// </summary>
+        private static Vector3 NavigationGoal(Agent agent, Vector3 goal, Vector3 playerEye)
+            => agent.State == AgentState.Chase
+                ? new Vector3(playerEye.X, playerEye.Y - PlayerEyeAboveFeet, playerEye.Z)
+                : goal;
+
+        private bool NavigationActive => NavigationEnabled && Navigation != null;
+
+        /// <summary>
+        /// La cible vient de changer (poursuite commencee ou abandonnee, point
+        /// de ronde atteint) : le chemin vers l'ancienne ne vaut plus rien, et
+        /// le suivant doit etre calcule TOUT DE SUITE - pas a la prochaine
+        /// echeance, qui laisserait le garde suivre une demi-seconde la ronde
+        /// qu'il vient d'abandonner pour poursuivre le joueur.
+        /// </summary>
+        private static void ResetNavigation(Agent agent)
+        {
+            agent.PathPoints.Clear();
+            agent.NavMode = AgentNavMode.Direct;
+            agent.ReplanIn = 0f;
+        }
+
+        /// <summary>
+        /// Le point vers lequel avancer ce pas-ci, ou null s'il faut attendre :
+        /// cible hors d'atteinte, et deja au plus pres.
+        ///
+        /// ⚠️ LA LIGNE DROITE D'ABORD. Si on peut marcher droit jusqu'a la
+        /// cible, on le fait - c'est le comportement d'avant E16, a l'identique,
+        /// et c'est aussi le chemin le plus court. Le calcul de chemin ne sert
+        /// que quand quelque chose barre la route.
+        /// </summary>
+        private Vector3? SteeringPoint(Agent agent, Vector3 goal, float dt)
+        {
+            NavGrid? nav = NavigationEnabled ? Navigation : null;
+
+            if (nav is null)
+            {
+                ResetNavigation(agent);
+                return goal;
+            }
+
+            agent.ReplanIn -= dt;
+
+            // On recalcule en quittant la ligne droite, puis toutes les
+            // ReplanSeconds : la cible bouge (poursuite), et le PNJ a pu etre
+            // pousse hors de son chemin.
+            //
+            // ⚠️ JAMAIS « FAUTE DE CHEMIN ». La premiere version recalculait
+            // tant que la liste etait vide - or elle reste vide quand la cible
+            // est inaccessible. Resultat : un A* complet a CHAQUE pas, 18 ms
+            // mesures sur 60 x 60 m, soit plus d'une image entiere pour un
+            // seul garde qui regarde un joueur monte sur une estrade.
+            if (agent.NavMode == AgentNavMode.Direct || agent.ReplanIn <= 0f)
+            {
+                // ⚠️ La ligne droite n'est re-testee qu'ICI, pas a chaque pas
+                // d'un chemin. Au ras d'un coin elle s'ouvre et se ferme d'un
+                // pas a l'autre au gre du glissement contre le mur : chaque
+                // fermeture relancerait un A*. Le chemin, deja lisse, ne perd
+                // presque rien a etre suivi une demi-seconde de plus.
+                if (nav.LineWalkable(agent.Position, goal))
+                {
+                    ResetNavigation(agent);
+                    return goal;
+                }
+
+                agent.ReplanIn = ReplanSeconds;
+                agent.PathIndex = 1;
+
+                agent.NavMode = nav.FindPath(agent.Position, goal, agent.PathPoints) switch
+                {
+                    PathStatus.Complete => AgentNavMode.Path,
+                    PathStatus.Partial => AgentNavMode.Approach,
+                    _ => AgentNavMode.OffGrid,
+                };
+            }
+
+            if (agent.NavMode == AgentNavMode.OffGrid)
+                return goal;
+
+            List<Vector3> points = agent.PathPoints;
+
+            // On vise le premier point pas encore atteint. Le premier du chemin
+            // est la case de depart : on le saute d'office (PathIndex = 1).
+            while (agent.PathIndex < points.Count - 1
+                   && FlatDistance(agent.Position, points[agent.PathIndex]) < NodeReachRadius)
+                agent.PathIndex++;
+
+            // Au bout du chemin. S'il menait a la cible, on finit droit dessus ;
+            // s'il ne menait qu'au plus pres, on s'arrete la et on attend.
+            // Continuer a viser le dernier point le ferait tourner autour, a
+            // quelques centimetres - le meme piege que ArriveRadius.
+            if (agent.PathIndex >= points.Count - 1 && FlatDistance(agent.Position, points[^1]) < NodeReachRadius)
+                return agent.NavMode == AgentNavMode.Approach ? null : goal;
+
+            return points[Math.Min(agent.PathIndex, points.Count - 1)];
+        }
+
+        private static float FlatDistance(Vector3 a, Vector3 b)
+            => new Vector2(a.X - b.X, a.Z - b.Z).Length();
 
         /// <summary>Ou le PNJ veut aller, ou null s'il n'a rien a faire.</summary>
         private Vector3? TargetOf(Agent agent, Vector3 playerEye)
@@ -322,6 +656,11 @@ namespace Exarion.Core.Entities
 
         private void Arrived(Agent agent)
         {
+            // La cible va changer (point suivant, ou repos) : le chemin vers
+            // l'ancienne ne sert plus. Sans ce vidage, le PNJ suivrait une demi-
+            // seconde le chemin du point qu'il vient d'atteindre.
+            ResetNavigation(agent);
+
             switch (agent.State)
             {
                 case AgentState.Patrol:
@@ -397,7 +736,7 @@ namespace Exarion.Core.Entities
             // la moindre marche et par tout muret : le PNJ serait aveugle dans
             // un decor normal, et on chercherait le defaut dans le champ de
             // vision.
-            if (_world != null && _world.Raycast(eye, direction, distance, out _, out _))
+            if (Solid is CollisionWorld solid && solid.Raycast(eye, direction, distance, out _, out _))
                 return false;
 
             return true;
@@ -410,7 +749,9 @@ namespace Exarion.Core.Entities
             string target = agent.Definition.Get("target");
             string input = agent.Definition.Get(InputKeyFor(output), DefaultInputFor(output));
 
-            _events.Add(new EntityEvent(agent.Definition, output, target, input));
+            EntityDelivery delivery = _router?.Send(target, input) ?? EntityDelivery.NonCablee;
+
+            _events.Add(new EntityEvent(agent.Definition, output, target, input, delivery));
             TotalEvents++;
         }
 
